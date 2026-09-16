@@ -168,9 +168,10 @@ button { font:inherit; cursor:pointer; }
 "use strict";
 
 const CONFIG = {
-    releaseVersion: "0.3.1",
+    releaseVersion: "0.3.2",
     patchNotesKey: "prestige-ascension-last-seen-version",
     patchNotes: [
+    "Infinity Cup補正の開始条件を修正。Infinity後もスコア1e308までは通常進行し、超過分だけに1/10補正を適用します。",
     "初回Infinity実行前はScoreを1e308に制限し、実行後に解除。速度そのものへの旧ソフトキャップを撤去し、表示速度200万以上から速度強化の増加量だけをlog10に圧縮します。",
     "Break Infinity対応：スコア・倍率・ポイント・速度・回数・強化レベルをDecimal化。1e308を超える計算、保存・復元、デバッグの文字列入力に対応。",
     "Infinity Challenge：退出ボタンを追加。IP・Tree・獲得済み報酬を保持して通常プレイへ戻れます。",
@@ -179,7 +180,7 @@ const CONFIG = {
     "高レベルの購入コストを調整。倍率Lv3500・速度Lv3000を超えると、超過レベルに応じてコストが急増します。",
     "IU1-2：ボール速度×1.5。IU2-1：速度強化の増加量×1.20（10%→12%）。IU7-1：log5(Infinity回数)÷10%のコスト割引。",
     "表示速度200万以上では、速度強化の増加量にlog10を適用します。",
-    "Infinity Cup Breakを追加。初回Infinity実行後は最終スコア獲得量÷10。表示倍率は維持し、IC全8種クリアで補正を永久解除。",
+    "Infinity Cup Breakを追加。初回Infinity実行後、スコア1e308を超える分だけ獲得量÷10。表示倍率は維持し、IC全8種クリアで補正を永久解除。",
     "Infinity Treeの表示を修正。カードをつぶさず縦にスクロールでき、Cup Breakの説明・状態はヘルプへ移動しました。",
     "起動時に更新内容を表示。閉じた後もヘルプの「更新履歴」から確認できます。",
     "以前の調整：Ascension Point基本除数を1000→500へ変更。IPがInfinityになる不具合とリサイズ時の不正なバウンドを修正。"
@@ -206,6 +207,11 @@ function readDecimal(value, fallback=0) {
 const DECIMAL_FIELDS={prestigeCount:0,ascensionCount:0,infinityCount:0,challengeSpeedGainLevels:0,score:0,ballMultiplier:1,prestigePoints:0,lastPrestigeScore:0,ascensionPoints:0,infinityPoints:0,speed:CONFIG.startingSpeed,bounceCount:0};
 class GameState {
   constructor(saved = {}) { Object.assign(this, { score: 0, ballMultiplier: 1, prestigePoints: 0, prestigeCount: 0, lastPrestigeScore: 0, ascensionPoints: 0, ascensionCount: 0, infinityPoints: 0, infinityCount: 0, infinityNodes: [], completedInfinityChallenges: [], activeInfinityChallenge: null, challengeSpeedGainLevels: 0, commonExponent: 1, infinityReached: false, speed: CONFIG.startingSpeed, bounceCount: 0, playTime: 0, lastTickAt: Date.now(), infinityStartedAt: Object.keys(saved).length ? null : Date.now(), bestInfinityTime: null, achievements: [], showTrail: true, upgradeLevels: { speed: 0, gain: 0 } }, saved); if (!Array.isArray(this.infinityNodes)) this.infinityNodes=[]; if (!Array.isArray(this.completedInfinityChallenges)) this.completedInfinityChallenges=[]; for (const [key,fallback] of Object.entries(DECIMAL_FIELDS)) this[key]=readDecimal(this[key],fallback); this.autoBuy={enabled:saved.autoBuy?.enabled===true,gain:saved.autoBuy?.gain!==false,speed:saved.autoBuy?.speed!==false}; this.upgradeLevels={speed:readDecimal(this.upgradeLevels?.speed),gain:readDecimal(this.upgradeLevels?.gain)}; if (this.infinityNodes.includes("10-2") && saved.commonExponent === undefined) this.commonExponent=1.20; if(this.infinityCount.gt(0)) this.infinityReached=true; this.score=this.capScore(this.score); }
+  applyInfinityScorePenalty(gain) {
+    if (!this.infinityReached || this.infinityCupBroken) return D(gain);
+    const unpenalized=D("1e308").sub(this.score).max(0).min(gain);
+    return unpenalized.add(D(gain).sub(unpenalized).div(10));
+  }
   capScore(value) { return this.infinityReached ? D(value) : D(value).min("1e308"); }
   recordInfinityArrival(now=Date.now()) {
     if (this.score.lt("1e308") || this.infinityStartedAt===null) return;
@@ -213,7 +219,7 @@ class GameState {
     if(seconds>=0 && (this.bestInfinityTime===null || seconds<this.bestInfinityTime)) this.bestInfinityTime=seconds;
   }
   get infinityCupBroken() { return Array.from({length:8},(_,i)=>"ic"+(i+1)).every(id=>this.hasCompletedIC(id)); }
-  get infinityHardCapActive() { return this.infinityReached && !this.infinityCupBroken; }
+  get infinityHardCapActive() { return this.infinityReached && !this.infinityCupBroken && this.score.gt("1e308"); }
   hasReward(id) { return this.achievements.includes(id); }
   hasInfinityNode(id) { return this.infinityNodes.includes(id); }
   hasCompletedIC(id) { return this.completedInfinityChallenges.includes(id); }
@@ -252,7 +258,7 @@ class GameState {
     else if(gain.eq(0) || gain.mul(n).lt(initial.mul(1e-8))) scoreGain=initial.mul(factor).pow(exponent).mul(n);
     // Midpoint integral approximates large batches without looping per bounce.
     else { const lo=initial.add(gain.div(2)), hi=lo.add(gain.mul(n)); scoreGain=hi.pow(exponent+1).sub(lo.pow(exponent+1)).div(gain.mul(exponent+1)).mul(factor.pow(exponent)); }
-    if (this.infinityHardCapActive) scoreGain=scoreGain.div(10);
+    scoreGain=this.applyInfinityScorePenalty(scoreGain);
     const nextScore=this.capScore(this.score.add(scoreGain)); scoreGain=nextScore.sub(this.score).max(0); this.score=nextScore; this.recordInfinityArrival(); this.bounceCount=this.bounceCount.add(n);
     return {bounces:n,scoreGain};
   }
@@ -514,8 +520,8 @@ class UIController {
   comingSoonMarkup(name, description) { return `<section class="coming-soon-page"><span class="eyebrow">COMING SOON</span><h2>${name}</h2><p>${description}</p></section>`; }
   cupBreakMarkup() {
     const s=this.state, cleared=Array.from({length:8},(_,i)=>"ic"+(i+1)).filter(id=>s.hasCompletedIC(id)).length;
-    const status=s.infinityCupBroken ? "達成済み — Hard Cap無効" : s.infinityHardCapActive ? "Hard Cap有効 — スコア獲得量 ÷10" : "Infinity実行後にHard Capが有効になります";
-    return `<section class="infinity-detail cup-break"><span class="eyebrow">INFINITY CUP BREAK</span><h2>${status}</h2><p>IC全8種クリアで自動解放（${cleared} / 8 CLEAR）。</p><p>${s.infinityCupBroken ? "最終スコア獲得量への1/10補正を解除しました。" : "表示倍率は変化せず、最終スコア獲得量だけに1/10の補正がかかります。"}</p></section>`;
+    const status=s.infinityCupBroken ? "達成済み — Hard Cap無効" : s.infinityHardCapActive ? "Hard Cap有効 — スコア獲得量 ÷10" : "スコア1e308まではHard Capの補正なし";
+    return `<section class="infinity-detail cup-break"><span class="eyebrow">INFINITY CUP BREAK</span><h2>${status}</h2><p>IC全8種クリアで自動解放（${cleared} / 8 CLEAR）。</p><p>${s.infinityCupBroken ? "最終スコア獲得量への1/10補正を解除しました。" : "Infinity実行後、スコア1e308を超える分だけに1/10補正がかかります。1e308までは通常通り進み、表示倍率は変化しません。"}</p></section>`;
   }
   infinityMarkup() { const s=this.state, panel=this.infinityPanel || "tree", selected=this.infinityTree.get(this.selectedInfinityNode || "1-1") || this.infinityTree.definitions[0]; const nav=[ ["tree","IT","Infinity Tree"], ["ball","IB","Infinity Ball"], ["punk","PK","Punk"] ].map(([id,abbr,label])=>`<button class="${panel===id ? "is-active" : ""}" data-infinity-panel="${id}"><b>${abbr}</b>${label}</button>`).join(""); const card=node=>{ const bought=this.infinityTree.isPurchased(node.id), available=this.infinityTree.canBuy(node.id), active=selected.id===node.id; return `<button class="infinity-node ${bought ? "is-purchased" : ""} ${available ? "can-buy" : ""} ${active ? "is-selected" : ""}" data-select-infinity-node="${node.id}"><strong>${node.id}</strong><span>${bought ? "購入済み" : `必要 ${format(node.cost)} IP`}</span></button>`; }; const grouped=this.infinityTree.definitions.reduce((groups,node)=>{ const stage=node.id.split("-")[0]; if (!groups[stage]) groups[stage]=[]; groups[stage].push(node); return groups; },{}); const stages=Object.values(grouped); const treeRows=stages.map(nodes=>`<div class="infinity-tree-stage ${nodes.length===1 ? "is-single" : ""}">${nodes.map(card).join("")}</div>`).join(""); const treePanel=`<section class="infinity-panel-content"><div class="tree-caption"><span>INFINITY UPGRADE</span><span>${format(s.infinityPoints)} IP</span></div><div class="infinity-tree">${treeRows}</div>${this.infinityNodeDetail(selected)}</section>`; const placeholder=panel==="ball" ? this.infinityPlaceholder("Infinity Ball", "IP 1.00e20 で解放されるInfinity専用ボールです。実装時には、ボール・速度・倍率獲得量をこのタブで管理します。") : this.infinityPlaceholder("Punk", "Infinity Tree 14-1で解放される永続リセット要素です。Punk Sphereとアップグレードは、このタブに追加されます。"); return `<section class="infinity-view"><header class="infinity-command"><div><span class="eyebrow">BREAK INFINITY CAP</span><h2>Infinity</h2></div><div class="infinity-metrics"><span><small>IP</small><b>${format(s.infinityPoints)}</b></span><span><small>INFINITY COUNT</small><b>${format(s.infinityCount)}</b></span></div><div class="infinity-action"><small>${this.infinity.available ? `獲得予定 +${format(this.infinity.pendingPoints)} IP` : "Score 1.00e308 で解放"}</small><button id="infinity-button" class="infinity-reset" ${this.infinity.available ? "" : "disabled"}>INFINITY</button></div></header><nav class="infinity-tabs" aria-label="Infinity要素">${nav}</nav>${panel==="tree" ? treePanel : placeholder}</section>`; }
   infinityNodeDetail(node) { const bought=this.infinityTree.isPurchased(node.id), prerequisites=this.infinityTree.prerequisitesMet(node), gated=Boolean(node.challengeGate)&&!this.infinityTree.challengeMet(node), available=this.infinityTree.canBuy(node.id); const requirement=node.requires.length ? node.requires.join(" / ") : "なし"; const status=bought ? "選択中・購入済み" : gated ? node.challengeGate : !prerequisites ? `前提ノード：${requirement}` : `必要 ${format(node.cost)} IP`; return `<aside class="infinity-detail"><div class="infinity-detail-top"><span>${status}</span><b>必要 ${format(node.cost)} IP</b></div><h2>${node.id} ${node.name}</h2><p>${node.effect}</p><small>前提：${requirement}</small><button data-buy-infinity-node="${node.id}" ${available ? "" : "disabled"}>${bought ? "購入済み" : "このノードを購入"}</button></aside>`; }
