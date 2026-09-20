@@ -200,10 +200,11 @@ button { font:inherit; cursor:pointer; }
 "use strict";
 
 const CONFIG = {
-    releaseVersion: "0.5.3",
+    releaseVersion: "0.5.4",
     infinityCupDivisor: 1000,
     patchNotesKey: "prestige-ascension-last-seen-version",
     patchNotes: [
+ "v0.5.4：実績30「阪神は関係ない」に報酬を追加。通常ボールの倍率獲得量の基礎値が0.01から0.1になります（取得済みにも適用）。",
  "v0.5.3：IU9-1でInfinity自動実行を解放。ON/OFFと目標獲得IPを設定・保存できます。",
  "v0.5.2：Infinity Treeを専用スクロールに変更。選択ノードの詳細・購入パネルを独立配置し、選択や購入後もスクロール位置を維持。",
     "v0.5.1：Infinity Tree接続線の常時再描画を廃止。表示・配置変更時のみ更新し、ノード位置の計測とSVG更新を軽量化。",
@@ -286,7 +287,8 @@ tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinity
   get upgradeMultiplier() { return Decimal.pow(1.20, this.upgradeLevels.gain.add(this.infinityUpgradeLevelBonus).add(this.activeIC==="ic8" ? this.challengeSpeedGainLevels : 0)); }
   get achievementBonus() { return Math.pow(1.01, this.achievements.length); }
   get infinityMultiplierGain() { if (!this.hasInfinityNode("1-1")) return 1; const count = this.infinityCount.min(10000); return D(this.infinityCount).add(1).mul(this.hasInfinityNode("12-2") ? Decimal.pow(1.005, count) : 1); }
-  get rawMultiplierGain() { const ascensionBonus=D(this.ascensionCount).mul(.5).mul(this.hasInfinityNode("14-1") ? D(this.ascensionCount).div(10).add(1).pow(1.15) : 1); let gain=this.upgradeMultiplier.mul(CONFIG.startingMultiplierGain).mul(this.achievementBonus).add(ascensionBonus).mul(this.infinityMultiplierGain); if(this.hasCompletedIC("ic1")) gain=gain.mul(2); if(this.activeIC==="ic1") return gain.div(1500); if(this.activeIC==="ic4") return gain.sqrt(); if(this.hasCompletedIC("ic4")) return gain.pow(1.1); return this.activeIC==="ic6" ? D(.01) : gain; }
+  get baseMultiplierGain() { return this.hasReward("score-1e334") ? D("0.1") : D(CONFIG.startingMultiplierGain); }
+  get rawMultiplierGain() { const ascensionBonus=D(this.ascensionCount).mul(.5).mul(this.hasInfinityNode("14-1") ? D(this.ascensionCount).div(10).add(1).pow(1.15) : 1); let gain=this.upgradeMultiplier.mul(this.baseMultiplierGain).mul(this.achievementBonus).add(ascensionBonus).mul(this.infinityMultiplierGain); if(this.hasCompletedIC("ic1")) gain=gain.mul(2); if(this.activeIC==="ic1") return gain.div(1500); if(this.activeIC==="ic4") return gain.sqrt(); if(this.hasCompletedIC("ic4")) return gain.pow(1.1); return this.activeIC==="ic6" ? D(.01) : gain; }
   get finalMultiplierGain() { const gain=this.rawMultiplierGain; return (gain.lte(10) ? gain : gain.div(10).pow(.75).mul(10)).mul(this.hasInfinityNode("15-2")?10:1); }
   get totalMultiplier() { return this.ballMultiplier.mul(this.prestigeMultiplier).mul(this.ascensionMultiplier).mul(this.futureMultiplier).pow(this.commonExponent); }
   awardBounce() { return this.processBounceCount(1).scoreGain; }
@@ -350,7 +352,7 @@ class AchievementSystem {
     {id:"clear-ic3",name:"まなこはどれくらい遅い？",description:"IC3をクリア",reward:"Infinity Point獲得量 ×1.5",condition:()=>{const s=this.state;return s.hasCompletedIC("ic3");}},
     {id:"clear-ic4",name:"実は意外と楽",description:"IC4をクリア",reward:"Infinity Point獲得量 ×2",condition:()=>{const s=this.state;return s.hasCompletedIC("ic4");}},
     {id:"ascension-5",name:"アセンドをやりすぎ",description:"Ascension回数が5以上",reward:"なし",condition:()=>{const s=this.state;return s.ascensionCount.gte(5);}},
-    {id:"score-1e334",name:"阪神は関係ない",description:"Scoreが1e334以上",reward:"なし",condition:()=>{const s=this.state;return s.score.gte("1e334");}},
+    {id:"score-1e334",name:"阪神は関係ない",description:"Scoreが1e334以上",reward:"通常ボールの倍率獲得量の基礎値を0.01 → 0.1に強化",condition:()=>{const s=this.state;return s.score.gte("1e334");}},
     {id:"clear-ic5",name:"インフィニティプロ",description:"IC5をクリア",reward:"Prestige倍率獲得量 × (1 + 累計バウンド数 / 1000)",condition:()=>{const s=this.state;return s.hasCompletedIC("ic5");}},
     {id:"fast-infinity",name:"インフィニティが速すぎる",description:"Infinity周回開始から10分未満で1e308に到達",reward:"なし",condition:()=>{const s=this.state;return s.bestInfinityTime!==null && s.bestInfinityTime<600;}},
     {id:"infinity-champ",name:"インフィニティチャンプ",description:"IC1～IC8をすべてクリア",reward:"Tree 12-1の上限を10,000 IP → 30,000 IPへ延長（最大+14 Lv）",condition:()=>{const s=this.state;return Array.from({length:8},(_,i)=>"ic"+(i+1)).every(id=>s.hasCompletedIC(id));}}
@@ -423,7 +425,7 @@ class InfinityTreeSystem {
       {id:"12-1", name:"宣伝効果？", cost:100000, requires:["11-2"], effect:"所持IP 2000ごとに通常強化2種へ+1 Lv（最大+4、実績#33取得後は最大+14）"},
       {id:"12-2", name:"ややこしいが間違いなく強い", cost:150000, requires:["11-1"], effect:"1-1をInfinity回数で追加強化"},
       {id:"13-1",name:"不動点を動かせ",cost:"1e8",requires:["12-1"],effect:"ボールスピード ×3"},
-{id:"13-2",name:"インフレーションの時代",cost:"1e10",requires:["12-1"],effect:"毎秒 1 / 最速Infinity秒 のInfinity回数を獲得。IU8-2で×2。オフライン対応（0秒記録のみ0.001秒として計算）"},
+{id:"13-2",name:"インフレーションの時代",cost:"4000000",requires:["12-1"],effect:"毎秒 1 / 最速Infinity秒 のInfinity回数を獲得。IU8-2で×2。オフライン対応（0秒記録のみ0.001秒として計算）"},
 {id:"14-1", name:"IP試し", cost:6660000, requires:["12-1","12-2","13-1","13-2"], effect:"Ascension由来の倍率獲得量を強化", challengeGate:"IC #4 クリアが必要", challengeRequirement:"ic4"},
       {id:"15-1",name:"モアバウンド、モアIP",cost:"1e12",requires:["14-1"],effect:"IP獲得量 × (1 + log10(1 + 60 / 最速Infinity秒)^2)。0秒記録のみ0.001秒として計算"},
 {id:"15-2",name:"ボール*ボール*ボール",cost:"1e15",requires:["14-1"],effect:"通常ボールの最終倍率獲得量 ×10"},
