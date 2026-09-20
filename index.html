@@ -200,10 +200,13 @@ button { font:inherit; cursor:pointer; }
 "use strict";
 
 const CONFIG = {
-    releaseVersion: "0.5.4",
+    releaseVersion: "0.5.7",
     infinityCupDivisor: 1000,
     patchNotesKey: "prestige-ascension-last-seen-version",
     patchNotes: [
+ "v0.5.7：IC6の倍率獲得量を最優先で0.01に固定。通常強化・IC4報酬・IU15-2などによる増加を無効化。",
+ "v0.5.6：IC6報酬の誤適用を修正。IPではなくInfinity実行時の回数獲得量を×2にします（IU8-2併用で+4）。",
+ "v0.5.5：IC8でPrestigeを使用可能に変更。代わりにPrestige倍率を通常の倍率の0.7乗に弱体化します。",
  "v0.5.4：実績30「阪神は関係ない」に報酬を追加。通常ボールの倍率獲得量の基礎値が0.01から0.1になります（取得済みにも適用）。",
  "v0.5.3：IU9-1でInfinity自動実行を解放。ON/OFFと目標獲得IPを設定・保存できます。",
  "v0.5.2：Infinity Treeを専用スクロールに変更。選択ノードの詳細・購入パネルを独立配置し、選択や購入後もスクロール位置を維持。",
@@ -258,13 +261,13 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   get activeIC() { return this.activeInfinityChallenge; }
   get rawPrestigeMultiplier(){return this.prestigePoints.mul(.5).add(1);}
 get prestigeSoftcapped(){return this.rawPrestigeMultiplier.gt("1e1500");}
-get prestigeMultiplier(){const p=this.rawPrestigeMultiplier;return p.lte("1e1500")?p:Decimal.pow(10,D(p.log10()).sub(1500).pow(.6).add(1500));}
+get prestigeMultiplier(){const p=this.rawPrestigeMultiplier;const effective=p.lte("1e1500")?p:Decimal.pow(10,D(p.log10()).sub(1500).pow(.6).add(1500));return this.activeIC==="ic8"?effective.pow(.7):effective;}
 get ic8IPMultiplier(){return this.hasCompletedIC("ic8")?this.prestigeMultiplier.div("1e20").min(5):D(1);}
 get ic8Hardcapped(){return this.hasCompletedIC("ic8")&&this.prestigeMultiplier.gte("5e20");}
-get infinityCountGain(){return D(this.hasInfinityNode("8-2")?2:1);}
+get infinityCountGain(){return D(this.hasInfinityNode("8-2")?2:1).mul(this.hasCompletedIC("ic6")?2:1);}
 get fastestInfinitySeconds(){if(this.bestInfinityTime===null)return null;try{const t=D(this.bestInfinityTime);return Number.isFinite(t.m)&&Number.isFinite(t.e)&&t.gte(0)?(t.eq(0)?D("0.001"):t):null;}catch{return null;}}
 get fastestInfinityIPMultiplier(){const t=this.fastestInfinitySeconds;return this.hasInfinityNode("15-1")&&t?D(D(60).div(t).add(1).log10()).pow(2).add(1):D(1);}
-get passiveInfinityRate(){const t=this.fastestInfinitySeconds;return this.hasInfinityNode("13-2")&&t?this.infinityCountGain.div(t):D(0);}
+get passiveInfinityRate(){const t=this.fastestInfinitySeconds;return this.hasInfinityNode("13-2")&&t?D(this.hasInfinityNode("8-2")?2:1).div(t):D(0);}
 tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinityLastAt)/1000;this.passiveInfinityLastAt=Math.max(now,this.passiveInfinityLastAt);const gain=this.passiveInfinityRate.mul(dt);this.infinityCount=this.infinityCount.add(gain);return gain;}
   get infinityMultiplier() { return this.infinityScoreBonus.mul(this.hasInfinityNode("7-2") ? this.infinityCount.div(10).add(1).sqrt() : 1); }
   get futureMultiplier() { return this.infinityMultiplier; }
@@ -288,8 +291,8 @@ tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinity
   get achievementBonus() { return Math.pow(1.01, this.achievements.length); }
   get infinityMultiplierGain() { if (!this.hasInfinityNode("1-1")) return 1; const count = this.infinityCount.min(10000); return D(this.infinityCount).add(1).mul(this.hasInfinityNode("12-2") ? Decimal.pow(1.005, count) : 1); }
   get baseMultiplierGain() { return this.hasReward("score-1e334") ? D("0.1") : D(CONFIG.startingMultiplierGain); }
-  get rawMultiplierGain() { const ascensionBonus=D(this.ascensionCount).mul(.5).mul(this.hasInfinityNode("14-1") ? D(this.ascensionCount).div(10).add(1).pow(1.15) : 1); let gain=this.upgradeMultiplier.mul(this.baseMultiplierGain).mul(this.achievementBonus).add(ascensionBonus).mul(this.infinityMultiplierGain); if(this.hasCompletedIC("ic1")) gain=gain.mul(2); if(this.activeIC==="ic1") return gain.div(1500); if(this.activeIC==="ic4") return gain.sqrt(); if(this.hasCompletedIC("ic4")) return gain.pow(1.1); return this.activeIC==="ic6" ? D(.01) : gain; }
-  get finalMultiplierGain() { const gain=this.rawMultiplierGain; return (gain.lte(10) ? gain : gain.div(10).pow(.75).mul(10)).mul(this.hasInfinityNode("15-2")?10:1); }
+  get rawMultiplierGain() { if(this.activeIC==="ic6") return D("0.01"); const ascensionBonus=D(this.ascensionCount).mul(.5).mul(this.hasInfinityNode("14-1") ? D(this.ascensionCount).div(10).add(1).pow(1.15) : 1); let gain=this.upgradeMultiplier.mul(this.baseMultiplierGain).mul(this.achievementBonus).add(ascensionBonus).mul(this.infinityMultiplierGain); if(this.hasCompletedIC("ic1")) gain=gain.mul(2); if(this.activeIC==="ic1") return gain.div(1500); if(this.activeIC==="ic4") return gain.sqrt(); if(this.hasCompletedIC("ic4")) return gain.pow(1.1); return gain; }
+  get finalMultiplierGain() { if(this.activeIC==="ic6") return D("0.01"); const gain=this.rawMultiplierGain; return (gain.lte(10) ? gain : gain.div(10).pow(.75).mul(10)).mul(this.hasInfinityNode("15-2")?10:1); }
   get totalMultiplier() { return this.ballMultiplier.mul(this.prestigeMultiplier).mul(this.ascensionMultiplier).mul(this.futureMultiplier).pow(this.commonExponent); }
   awardBounce() { return this.processBounceCount(1).scoreGain; }
   processBounceCount(bounces) {
@@ -385,7 +388,7 @@ class PrestigeSystem {
   constructor(state) { this.state = state; }
   get ic2Reduction() { if(!this.state.hasCompletedIC("ic2")) return 0; const pp=this.state.prestigePoints; const units=pp.lt(100000) ? pp.div(100).floor() : pp.sub(100000).div(10000).floor().add(1000); const raw=units.mul(.001).min(100).toNumber(); return raw<=.35 ? raw : .35+.65*(1-Math.exp(-(raw-.35)/.10)); }
   get requirement() { const base=this.state.lastPrestigeScore.gt(0) ? this.state.lastPrestigeScore : CONFIG.prestigeRequirement; return D(base).mul(1-this.ic2Reduction); }
-  get available() { return this.state.activeIC!=="ic8" && (this.state.lastPrestigeScore.gt(0) ? this.state.score.gt(this.requirement) : this.state.score.gte(this.requirement)); }
+  get available() { return (this.state.lastPrestigeScore.gt(0) ? this.state.score.gt(this.requirement) : this.state.score.gte(this.requirement)); }
   get pendingPoints() { const divisor=((this.state.achievements && this.state.achievements.includes("prestige-10000")) ? 100000 : CONFIG.prestigeRequirement) * (this.state.activeIC==="ic2" ? 5 : 1); return this.state.score.div(divisor).sqrt().mul(this.state.hasInfinityNode("3-1") ? 1.30 : 1).add(.10).mul(this.state.hasReward("clear-ic5") || this.state.hasCompletedIC("ic5") ? this.state.bounceCount.div(1000).add(1) : 1); }
   perform() { if (!this.available) return false; this.state.prestigePoints = this.state.prestigePoints.add(this.pendingPoints); this.state.prestigeCount=this.state.prestigeCount.add(1); this.state.lastPrestigeScore = this.state.score; new AchievementSystem(this.state).check(); this.state.resetRun(); return true; }
 }
@@ -448,9 +451,9 @@ class InfinityChallengeSystem {
     {id:"ic3", name:"ナマコのような遅さ", restriction:"速度 ^0.8・強化コスト成長 ×2", reward:"速度 ^1.2"},
     {id:"ic4", name:"増加はできない", restriction:"倍率獲得量 G ^0.5", reward:"倍率獲得量 G ^1.1"},
     {id:"ic5", name:"成仏はできない", restriction:"Ascension使用不可", reward:"共通指数 +0.10"},
-    {id:"ic6", name:"価値は不変だ", restriction:"倍率獲得量を 0.01 に固定", reward:"Infinity獲得量 ×2"},
+    {id:"ic6", name:"価値は不変だ", restriction:"倍率獲得量を0.01に固定（アップグレード・実績・IU・IC報酬による変更なし）", reward:"Infinity実行時の回数獲得量 ×2（通常+1 → +2、IU8-2併用で+4）"},
     {id:"ic7", name:"質素倹約とはいうものの", restriction:"コスト 1.00e30 超は購入不可", reward:"ショップコスト ×0.80"},
-    {id:"ic8", name:"向上心はよいこと", restriction:"Prestige不可・Ascension指数+0.5・速度強化→倍率獲得量", reward:"Infinity獲得量 × min(Prestige倍率 / 1e20, 5)（最大×5）"}
+    {id:"ic8", name:"向上心はよいこと", restriction:"Prestige倍率 ^0.7（大幅弱体化）・Ascension指数+0.5・速度強化→倍率獲得量", reward:"Infinity獲得量 × min(Prestige倍率 / 1e20, 5)（最大×5）"}
   ]; }
   get unlocked() { return this.state.infinityReached && this.state.hasInfinityNode("4-1"); }
   get(id) { return this.definitions.find(item=>item.id===id); }
@@ -479,7 +482,7 @@ const logarithm=s.hasInfinityNode("10-1")?s.score.log(7):s.score.log10();
 // Existing base, with each independent IP reward applied exactly once.
 return D(logarithm).floor().sub(307).max(0)
 .mul(s.hasInfinityNode("6-2")?2:1).mul(s.hasInfinityNode("8-1")?2:1)
-.mul(s.hasCompletedIC("ic6")?2:1).mul(s.ic8IPMultiplier)
+.mul(s.ic8IPMultiplier)
 .mul(s.hasReward("clear-ic3")||s.hasCompletedIC("ic3")?1.5:1)
 .mul(s.hasReward("clear-ic4")||s.hasCompletedIC("ic4")?2:1)
 .mul(s.fastestInfinityIPMultiplier);
