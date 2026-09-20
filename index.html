@@ -200,10 +200,13 @@ button { font:inherit; cursor:pointer; }
 "use strict";
 
 const CONFIG = {
-    releaseVersion: "0.5.7",
+    releaseVersion: "0.5.10",
     infinityCupDivisor: 1000,
     patchNotesKey: "prestige-ascension-last-seen-version",
     patchNotes: [
+ "v0.5.10：P.multソフトキャップの圧縮指数を0.6から0.8へ変更。開始地点は1e10000を維持。",
+ "v0.5.9：P.multソフトキャップの開始を1e10000へ変更。圧縮指数0.6は維持。",
+ "v0.5.8：gameDebugの数値設定をoverrideで固定。clearOverride / clearOverridesで解除できます。override中は自動Infinityを一時停止。固定設定自体は再読み込みで解除されます。",
  "v0.5.7：IC6の倍率獲得量を最優先で0.01に固定。通常強化・IC4報酬・IU15-2などによる増加を無効化。",
  "v0.5.6：IC6報酬の誤適用を修正。IPではなくInfinity実行時の回数獲得量を×2にします（IU8-2併用で+4）。",
  "v0.5.5：IC8でPrestigeを使用可能に変更。代わりにPrestige倍率を通常の倍率の0.7乗に弱体化します。",
@@ -213,7 +216,7 @@ const CONFIG = {
     "v0.5.1：Infinity Tree接続線の常時再描画を廃止。表示・配置変更時のみ更新し、ノード位置の計測とSVG更新を軽量化。",
     "v0.5：IU7強化、IU8・13・15追加。旧購入状態は新番号へ自動移行。",
     "最速InfinityによるIP強化・オフライン対応パッシブInfinity回数を追加。",
-    "P.multは1e1500超からSoftcap。IC8のIP報酬は最大×5（Hardcapped）。"
+    "v0.5時点：P.multは1e1500超からSoftcap（現在は1e10000）。IC8のIP報酬は最大×5（Hardcapped）。"
 ],
     prestigeRequirement: 200000,
     ascensionRequirement: 1e15,
@@ -260,8 +263,8 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   hasCompletedIC(id) { return this.completedInfinityChallenges.includes(id); }
   get activeIC() { return this.activeInfinityChallenge; }
   get rawPrestigeMultiplier(){return this.prestigePoints.mul(.5).add(1);}
-get prestigeSoftcapped(){return this.rawPrestigeMultiplier.gt("1e1500");}
-get prestigeMultiplier(){const p=this.rawPrestigeMultiplier;const effective=p.lte("1e1500")?p:Decimal.pow(10,D(p.log10()).sub(1500).pow(.6).add(1500));return this.activeIC==="ic8"?effective.pow(.7):effective;}
+get prestigeSoftcapped(){return this.rawPrestigeMultiplier.gt("1e10000");}
+get prestigeMultiplier(){const p=this.rawPrestigeMultiplier;const effective=p.lte("1e10000")?p:Decimal.pow(10,D(p.log10()).sub(10000).pow(.8).add(10000));return this.activeIC==="ic8"?effective.pow(.7):effective;}
 get ic8IPMultiplier(){return this.hasCompletedIC("ic8")?this.prestigeMultiplier.div("1e20").min(5):D(1);}
 get ic8Hardcapped(){return this.hasCompletedIC("ic8")&&this.prestigeMultiplier.gte("5e20");}
 get infinityCountGain(){return D(this.hasInfinityNode("8-2")?2:1).mul(this.hasCompletedIC("ic6")?2:1);}
@@ -561,7 +564,7 @@ class AutomationSystem {
   setInfinitySettings(enabled,value) {
 try{if(typeof value==='string'&&!value.trim())return false;const target=D(value);if(!Number.isFinite(target.m)||!Number.isFinite(target.e)||target.e>=9e15||target.lt(1))return false;this.state.autoInfinity={enabled:enabled===true,targetIP:target};return true;}catch{return false;}
   }
-  tryInfinity(){const s=this.state;if(!s.autoInfinity.enabled||!s.hasInfinityNode('9-1'))return false;s.tickPassiveInfinity();s.recordInfinityArrival();const reset=new InfinitySystem(s,new InfinityChallengeSystem(s));if(!reset.available||reset.pendingPoints.lt(s.autoInfinity.targetIP))return false;return Boolean(reset.perform());}
+  tryInfinity(){const s=this.state;if(s.debugOverridesActive||!s.autoInfinity.enabled||!s.hasInfinityNode('9-1'))return false;s.tickPassiveInfinity();s.recordInfinityArrival();const reset=new InfinitySystem(s,new InfinityChallengeSystem(s));if(!reset.available||reset.pendingPoints.lt(s.autoInfinity.targetIP))return false;return Boolean(reset.perform());}
   processBackgroundTick(seconds) { return this.tick(); }
   tick() {
     if(this.tryInfinity())return 0;
@@ -733,9 +736,40 @@ function formatMultiplier(value) { const d=D(value); return (d.abs().gte(1e9) ||
 function formatScientific(value) { return format(value); }
 function formatDuration(seconds) { const hours=Math.floor(seconds/3600), minutes=Math.floor((seconds%3600)/60); return `${hours}時間 ${minutes}分`; }
 function formatPreciseDuration(seconds) { const hours=Math.floor(seconds/3600), minutes=Math.floor((seconds%3600)/60), remaining=Math.floor(seconds%60); return hours>0 ? `${hours}時間${minutes}分${remaining}秒` : minutes>0 ? `${minutes}分${remaining}秒` : `${remaining}秒`; }
+
+// Session-only locks: intercept writes instead of repairing state after every tick.
+class DebugOverrides {
+  constructor(state){this.state=state;this.values=new Map();this.supported=new Set([...Object.keys(DECIMAL_FIELDS),'upgradeLevels.speed','upgradeLevels.gain','prestigeMultiplier','ascensionMultiplier','infinityMultiplier','effectiveSpeed','rawMultiplierGain','finalMultiplierGain','totalMultiplier']);
+    Object.defineProperty(state,'debugOverridesActive',{get:()=>this.values.size>0});
+    let levels=state.upgradeLevels;
+    const wrap=value=>{for(const key of ['speed','gain'])this.bind(value,key,'upgradeLevels.'+key);return value;};
+    levels=wrap(levels);Object.defineProperty(state,'upgradeLevels',{enumerable:true,configurable:true,get:()=>levels,set:value=>{levels=wrap(value);}});
+  }
+  bind(target,key,path){const descriptor=Object.getOwnPropertyDescriptor(target,key);if(descriptor?.get?.debugLock)return;
+    const original=descriptor || Object.getOwnPropertyDescriptor(GameState.prototype,key);let value=target[key];
+    const get=()=>this.values.has(path)?this.values.get(path):(original?.get?original.get.call(target):value);get.debugLock=true;
+    Object.defineProperty(target,key,{configurable:true,enumerable:descriptor?.enumerable??false,get,set:next=>{if(!this.values.has(path)&&!original?.get)value=next;}});
+    return next=>{if(!original?.get)value=next;};
+  }
+  set(path,input){if(!this.supported.has(path))throw Error('Unsupported override: '+path);
+    const value=path.endsWith('Count')||path.startsWith('upgradeLevels.')?debugCount(input):debugDecimal(input);
+    const nested=path.startsWith('upgradeLevels.'),target=nested?this.state.upgradeLevels:this.state,key=nested?path.split('.')[1]:path;
+    if(!this.values.has(path)){this.bind(target,key,path);if(!Object.getOwnPropertyDescriptor(GameState.prototype,key)?.get)target[key]=value;}
+    this.values.set(path,value);if(path==='score'){this.state.debugScoreOverride=true;this.state.recordCupThreshold();}return value;
+  }
+  clear(path){if(!this.supported.has(path))throw Error('Unsupported override: '+path);if(!this.values.has(path))return false;
+    const value=this.values.get(path);this.values.delete(path);const nested=path.startsWith('upgradeLevels.'),key=nested?path.split('.')[1]:path;
+    if(nested)this.state.upgradeLevels[key]=value;else if(!Object.getOwnPropertyDescriptor(GameState.prototype,key)?.get)this.state[key]=value;
+    if(path==='score'){this.state.debugScoreOverride=false;this.state.score=this.state.capScore(this.state.score);}return true;
+  }
+  clearAll(){for(const path of [...this.values.keys()])this.clear(path);}
+  list(){return Object.fromEntries([...this.values].map(([key,value])=>[key,value.toString()]));}
+}
+
 function loadState() { try { return new GameState(JSON.parse(localStorage.getItem(CONFIG.saveKey)) || {}); } catch { return new GameState(); } }
 
 const state=loadState(), achievements=new AchievementSystem(state), upgrades=new UpgradeSystem(state,achievements), prestige=new PrestigeSystem(state), ascension=new AscensionSystem(state), infinityTree=new InfinityTreeSystem(state), challenges=new InfinityChallengeSystem(state), infinity=new InfinitySystem(state,challenges), ui=new UIController(state,upgrades,prestige,ascension,infinity,infinityTree,challenges,achievements);
+const debugOverrides=new DebugOverrides(state);
 const infinityBallSystem=new InfinityBallSystem(state,upgrades,achievements);
 infinityBallSystem.tick();
 const physics=new PhysicsEngine(document.getElementById("bounce-canvas"),state,gain=>{ui.lastGain=state.lastBounceScoreGain ?? gain;});
@@ -767,6 +801,10 @@ function debugCount(value) {
     return result;
 }
 window.gameDebug = {
+    override(field,value){const result=debugOverrides.set(field,value);ui.render();return result;},
+    clearOverride(field){const result=debugOverrides.clear(field);ui.render();return result;},
+    clearOverrides(){debugOverrides.clearAll();ui.render();return true;},
+    get overrides(){return debugOverrides.list();},
     // 現在のゲーム状態を取得
     get state() {
         return state;
@@ -774,63 +812,63 @@ window.gameDebug = {
 
     // スコアを設定
     setScore(value) {
-        const parsed=debugDecimal(value); state.recordCupThreshold(); state.debugScoreOverride=true; state.score=parsed; state.recordCupThreshold();
+        const parsed=debugDecimal(value); state.recordCupThreshold(); state.debugScoreOverride=true; debugOverrides.set("score",parsed); state.recordCupThreshold();
         ui.render();
         return state.score;
     },
 
     // スコアを加算
     addScore(value) {
-        const parsed=debugDecimal(value); state.recordCupThreshold(); state.debugScoreOverride=true; state.score=state.score.add(parsed); state.recordCupThreshold();
+        const parsed=debugDecimal(value); state.recordCupThreshold(); state.debugScoreOverride=true; debugOverrides.set("score",state.score.add(parsed)); state.recordCupThreshold();
         ui.render();
         return state.score;
     },
 
     // ボール倍率を設定
     setBallMultiplier(value) {
-        state.ballMultiplier = debugDecimal(value);
+        debugOverrides.set("ballMultiplier",value);
         ui.render();
         return state.ballMultiplier;
     },
 
     // Prestige Pointを設定
     setPrestigePoints(value) {
-        state.prestigePoints = debugDecimal(value);
+        debugOverrides.set("prestigePoints",value);
         ui.render();
         return state.prestigePoints;
     },
 
     // Ascension Pointを設定
     setAscensionPoints(value) {
-        state.ascensionPoints = debugDecimal(value);
+        debugOverrides.set("ascensionPoints",value);
         ui.render();
         return state.ascensionPoints;
     },
 
     // Prestige回数を設定
     setPrestigeCount(value) {
-        state.prestigeCount = debugCount(value);
+        debugOverrides.set("prestigeCount",value);
         ui.render();
         return state.prestigeCount;
     },
 
     // Ascension回数を設定
     setAscensionCount(value) {
-        state.ascensionCount = debugCount(value);
+        debugOverrides.set("ascensionCount",value);
         ui.render();
         return state.ascensionCount;
     },
 
     // 速度を設定
     setSpeed(value) {
-        state.speed = debugDecimal(value);
+        debugOverrides.set("speed",value);
         ui.render();
         return state.speed;
     },
 
     // バウンド数を設定
     setBounces(value) {
-        state.bounceCount = debugDecimal(value);
+        debugOverrides.set("bounceCount",value);
         ui.render();
         return state.bounceCount;
     },
@@ -841,7 +879,7 @@ window.gameDebug = {
             throw new Error("Unknown upgrade type: " + type);
         }
 
-        state.upgradeLevels[type] = debugCount(value);
+        debugOverrides.set("upgradeLevels."+type,value);
         ui.render();
         return state.upgradeLevels[type];
     },
@@ -869,14 +907,14 @@ window.gameDebug = {
 
     // Infinity Pointを設定
     setInfinityPoints(value) {
-        state.infinityPoints = debugDecimal(value);
+        debugOverrides.set("infinityPoints",value);
         ui.render();
         return state.infinityPoints;
     },
 
     // Infinity回数を設定
     setInfinityCount(value) {
-        state.infinityCount = debugCount(value);
+        debugOverrides.set("infinityCount",value);
         ui.render();
         return state.infinityCount;
     },
