@@ -200,10 +200,12 @@ button { font:inherit; cursor:pointer; }
 "use strict";
 
 const CONFIG = {
-    releaseVersion: "0.5.10",
+    releaseVersion: "0.5.11",
     infinityCupDivisor: 1000,
     patchNotesKey: "prestige-ascension-last-seen-version",
     patchNotes: [
+ "v0.5.11：IU1-2に倍率獲得量×1.5、IU4-1にリセット後のBall倍率10、IU11-1にIP×1.3を追加。",
+ "実績34～40と永続報酬を追加。実績36のIP倍率は実績1～35の解除数のみを参照（最大×3.5）。",
  "v0.5.10：P.multソフトキャップの圧縮指数を0.6から0.8へ変更。開始地点は1e10000を維持。",
  "v0.5.9：P.multソフトキャップの開始を1e10000へ変更。圧縮指数0.6は維持。",
  "v0.5.8：gameDebugの数値設定をoverrideで固定。clearOverride / clearOverridesで解除できます。override中は自動Infinityを一時停止。固定設定自体は再読み込みで解除されます。",
@@ -238,6 +240,7 @@ function readDecimal(value, fallback=0) {
   catch { return D(fallback); }
 }
 const DECIMAL_FIELDS={prestigeCount:0,ascensionCount:0,infinityCount:0,challengeSpeedGainLevels:0,score:0,ballMultiplier:1,prestigePoints:0,lastPrestigeScore:0,ascensionPoints:0,infinityPoints:0,speed:CONFIG.startingSpeed,bounceCount:0};
+const ACHIEVEMENT_IP_COUNT_IDS=Object.freeze(["first-upgrade","gain-030","ball-100","level-20","bounces-10000","first-prestige","speed-500","play-5h","prestige-5","speed-1000","one-bounce-overflow","prestige-100","first-ascension","speed-2500","score-1e40","second-ascension","prestige-10000","score-1e100","final-gain-100","score-1e300","infinite","infinity-2","tree-2-1","ball-1e25","tree-4-1","tree-7-1","clear-ic3","clear-ic4","ascension-5","score-1e334","clear-ic5","fast-infinity","infinity-champ","upgrades-3400","infinity-100000"]);
 class GameState {
   constructor(saved = {}) { Object.assign(this, { score: 0, ballMultiplier: 1, prestigePoints: 0, prestigeCount: 0, lastPrestigeScore: 0, ascensionPoints: 0, ascensionCount: 0, infinityPoints: 0, infinityCount: 0, infinityNodes: [], completedInfinityChallenges: [], activeInfinityChallenge: null, challengeSpeedGainLevels: 0, commonExponent: 1, infinityReached: false, speed: CONFIG.startingSpeed, bounceCount: 0, playTime: 0, lastTickAt: Date.now(), infinityStartedAt: Object.keys(saved).length ? null : Date.now(), bestInfinityTime: null, achievements: [], showTrail: true, upgradeLevels: { speed: 0, gain: 0 } }, saved); if (!Array.isArray(this.infinityNodes)) this.infinityNodes=[];
 if(!(saved.infinityTreeVersion>=5)){const map={8:9,9:10,10:11,11:12,12:14,13:16,14:17};this.infinityNodes=this.infinityNodes.map(id=>id.replace(/^(8|9|10|11|12|13|14)-/,(_,n)=>map[n]+"-"));}
@@ -272,7 +275,9 @@ get fastestInfinitySeconds(){if(this.bestInfinityTime===null)return null;try{con
 get fastestInfinityIPMultiplier(){const t=this.fastestInfinitySeconds;return this.hasInfinityNode("15-1")&&t?D(D(60).div(t).add(1).log10()).pow(2).add(1):D(1);}
 get passiveInfinityRate(){const t=this.fastestInfinitySeconds;return this.hasInfinityNode("13-2")&&t?D(this.hasInfinityNode("8-2")?2:1).div(t):D(0);}
 tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinityLastAt)/1000;this.passiveInfinityLastAt=Math.max(now,this.passiveInfinityLastAt);const gain=this.passiveInfinityRate.mul(dt);this.infinityCount=this.infinityCount.add(gain);return gain;}
-  get infinityMultiplier() { return this.infinityScoreBonus.mul(this.hasInfinityNode("7-2") ? this.infinityCount.div(10).add(1).sqrt() : 1); }
+  get infinityMultiplier() { return this.infinityScoreBonus.mul(this.hasInfinityNode("7-2") ? this.infinityCount.div(10).add(1).sqrt() : 1).mul(this.hasReward("score-1e10000") ? 10 : 1); }
+  get achievement36IPMultiplier() { return this.hasReward("ip-1e6") ? D(ACHIEVEMENT_IP_COUNT_IDS.filter(id=>this.hasReward(id)).length).div(10).min(3.5) : D(1); }
+  get initialBallMultiplier() { return D(this.hasInfinityNode("4-1") ? 10 : 1); }
   get futureMultiplier() { return this.infinityMultiplier; }
   get infinityScoreExponent() { return this.hasInfinityNode("16-1") ? .5 : .3; }
   get infinityScoreBonus() { return this.infinityBall.score.max(1).pow(this.infinityScoreExponent); }
@@ -295,7 +300,7 @@ tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinity
   get infinityMultiplierGain() { if (!this.hasInfinityNode("1-1")) return 1; const count = this.infinityCount.min(10000); return D(this.infinityCount).add(1).mul(this.hasInfinityNode("12-2") ? Decimal.pow(1.005, count) : 1); }
   get baseMultiplierGain() { return this.hasReward("score-1e334") ? D("0.1") : D(CONFIG.startingMultiplierGain); }
   get rawMultiplierGain() { if(this.activeIC==="ic6") return D("0.01"); const ascensionBonus=D(this.ascensionCount).mul(.5).mul(this.hasInfinityNode("14-1") ? D(this.ascensionCount).div(10).add(1).pow(1.15) : 1); let gain=this.upgradeMultiplier.mul(this.baseMultiplierGain).mul(this.achievementBonus).add(ascensionBonus).mul(this.infinityMultiplierGain); if(this.hasCompletedIC("ic1")) gain=gain.mul(2); if(this.activeIC==="ic1") return gain.div(1500); if(this.activeIC==="ic4") return gain.sqrt(); if(this.hasCompletedIC("ic4")) return gain.pow(1.1); return gain; }
-  get finalMultiplierGain() { if(this.activeIC==="ic6") return D("0.01"); const gain=this.rawMultiplierGain; return (gain.lte(10) ? gain : gain.div(10).pow(.75).mul(10)).mul(this.hasInfinityNode("15-2")?10:1); }
+  get finalMultiplierGain() { if(this.activeIC==="ic6") return D("0.01"); const gain=this.rawMultiplierGain; return (gain.lte(10) ? gain : gain.div(10).pow(.75).mul(10)).mul(this.hasInfinityNode("15-2")?10:1).mul(this.hasInfinityNode("1-2")?1.5:1).mul(this.hasReward("score-1e5000")?1.2:1); }
   get totalMultiplier() { return this.ballMultiplier.mul(this.prestigeMultiplier).mul(this.ascensionMultiplier).mul(this.futureMultiplier).pow(this.commonExponent); }
   awardBounce() { return this.processBounceCount(1).scoreGain; }
   processBounceCount(bounces) {
@@ -321,9 +326,9 @@ tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinity
     return {bounces:n,scoreGain};
   }
   processBackgroundTime(seconds) { return this.processBounceCount(this.effectiveSpeed.mul(seconds).div(CONFIG.averageDistance).floor()); }
-  resetRun() { this.debugScoreOverride=false; this.score = D(0); this.ballMultiplier = D(1); this.speed = this.initialSpeed; this.upgradeLevels={speed:D(0),gain:D(0)}; this.challengeSpeedGainLevels=D(0); }
+  resetRun() { this.debugScoreOverride=false; this.score = D(0); this.ballMultiplier = this.initialBallMultiplier; this.speed = this.initialSpeed; this.upgradeLevels={speed:D(0),gain:D(0)}; this.challengeSpeedGainLevels=D(0); }
   resetForAscension() { this.prestigePoints = D(0); this.prestigeCount = D(0); this.lastPrestigeScore = D(0); this.resetRun(); }
-  resetForInfinity() { this.infinityCupTriggered=false; this.debugScoreOverride=false; this.infinityStartedAt=Date.now(); this.score=D(0); this.ballMultiplier=D(1); this.prestigePoints=D(0); this.prestigeCount=D(0); this.lastPrestigeScore=D(0); this.ascensionPoints=D(0); this.ascensionCount=D(0); this.speed=D(CONFIG.startingSpeed); this.upgradeLevels={speed:D(0),gain:D(0)}; this.challengeSpeedGainLevels=D(0); }
+  resetForInfinity() { this.infinityCupTriggered=false; this.debugScoreOverride=false; this.infinityStartedAt=Date.now(); this.score=D(0); this.ballMultiplier=this.initialBallMultiplier; this.prestigePoints=D(0); this.prestigeCount=D(0); this.lastPrestigeScore=D(0); this.ascensionPoints=D(0); this.ascensionCount=D(0); this.speed=D(CONFIG.startingSpeed); this.upgradeLevels={speed:D(0),gain:D(0)}; this.challengeSpeedGainLevels=D(0); }
   serialize() { this.recordCupThreshold(); return { infinityTreeVersion:5, passiveInfinityLastAt:this.passiveInfinityLastAt, infinityCupTriggered:this.infinityCupTriggered===true, debugScoreOverride:this.debugScoreOverride===true, infinityBall:this.infinityBall, autoBuy:{...this.autoBuy},autoInfinity:{...this.autoInfinity}, score:this.score, ballMultiplier:this.ballMultiplier, prestigePoints:this.prestigePoints, prestigeCount:this.prestigeCount, lastPrestigeScore:this.lastPrestigeScore, ascensionPoints:this.ascensionPoints, ascensionCount:this.ascensionCount, infinityPoints:this.infinityPoints, infinityCount:this.infinityCount, infinityNodes:this.infinityNodes, completedInfinityChallenges:this.completedInfinityChallenges, activeInfinityChallenge:this.activeInfinityChallenge, challengeSpeedGainLevels:this.challengeSpeedGainLevels, commonExponent:this.commonExponent, infinityReached:this.infinityReached, speed:this.speed, bounceCount:this.bounceCount, playTime:this.playTime, lastTickAt:this.lastTickAt,infinityStartedAt:this.infinityStartedAt,bestInfinityTime:this.bestInfinityTime, achievements:this.achievements, showTrail:this.showTrail, upgradeLevels:this.upgradeLevels }; }
 }
 
@@ -362,6 +367,14 @@ class AchievementSystem {
     {id:"clear-ic5",name:"インフィニティプロ",description:"IC5をクリア",reward:"Prestige倍率獲得量 × (1 + 累計バウンド数 / 1000)",condition:()=>{const s=this.state;return s.hasCompletedIC("ic5");}},
     {id:"fast-infinity",name:"インフィニティが速すぎる",description:"Infinity周回開始から10分未満で1e308に到達",reward:"なし",condition:()=>{const s=this.state;return s.bestInfinityTime!==null && s.bestInfinityTime<600;}},
     {id:"infinity-champ",name:"インフィニティチャンプ",description:"IC1～IC8をすべてクリア",reward:"Tree 12-1の上限を10,000 IP → 30,000 IPへ延長（最大+14 Lv）",condition:()=>{const s=this.state;return Array.from({length:8},(_,i)=>"ic"+(i+1)).every(id=>s.hasCompletedIC(id));}}
+,
+    {id:"upgrades-3400",name:"売り切れはこない",description:"速度・倍率獲得量アップグレードの両方がLv.3400を超える",reward:"IP獲得量 ×1.2",condition:()=>this.state.upgradeLevels.speed.gt(3400)&&this.state.upgradeLevels.gain.gt(3400)},
+    {id:"infinity-100000",name:"インフィニティ長者",description:"Infinity回数が100,000を超える",reward:"なし",condition:()=>this.state.infinityCount.gt(100000)},
+    {id:"ip-1e6",name:"IPはまだ足りない",description:"所持IPが1,000,000を超える",reward:"IP獲得量 × min(実績1～35の解除数 / 10, 3.5)",condition:()=>this.state.infinityPoints.gt("1e6")},
+    {id:"score-1e5000",name:"マーケットはがらんどう",description:"Scoreが1e5000を超える",reward:"ボール倍率獲得量 ×1.2（永続）",condition:()=>this.state.score.gt("1e5000")},
+    {id:"ip-1e15",name:"もうすぐ新しいボール",description:"所持IPが1e15以上",reward:"なし",condition:()=>this.state.infinityPoints.gte("1e15")},
+    {id:"ascension-7",name:"昇天しすぎ",description:"Ascension回数が7以上",reward:"なし",condition:()=>this.state.ascensionCount.gte(7)},
+    {id:"score-1e10000",name:"キリのいい数字",description:"Scoreが1e10000以上",reward:"Infinity倍率 ×10（リセット後も永続）",condition:()=>this.state.score.gte("1e10000")}
   ]; }
   isUnlocked(id) { return this.state.achievements.includes(id); }
   check() { this.state.recordInfinityArrival(); const unlocked=[]; this.definitions.forEach(item=>{ if(!this.isUnlocked(item.id)&&item.condition()) { this.state.achievements.push(item.id); unlocked.push(item); }}); return unlocked; }
@@ -411,11 +424,11 @@ class InfinityTreeSystem {
     this.state=state;
     this.definitions=[
       {id:"1-1", name:"リセットは苦ではない", cost:1, requires:[], effect:"倍率獲得量 × (Infinity回数 + 1)"},
-      {id:"1-2", name:"速さ×重さ＝火力？", cost:1, requires:[], effect:"ボール速度 ×1.50"},
+      {id:"1-2", name:"速さ×重さ＝火力？", cost:1, requires:[], effect:"ボール速度 ×1.50・最終倍率獲得量 ×1.50"},
       {id:"2-1", name:"見えない速さ", cost:2, requires:["1-1","1-2"], effect:"速度強化の増加量 ×1.20（10% → 12%）。表示速度200万以上では増加量にlog10を適用"},
       {id:"3-1", name:"致命的な強化", cost:3, requires:["2-1"], effect:"Prestige Point獲得量 ×1.30"},
       {id:"3-2", name:"激安タイムセール", cost:3, requires:["2-1"], effect:"通常アップグレードコスト ×0.90"},
-      {id:"4-1", name:"挑戦の時", cost:4, requires:["3-1","3-2"], effect:"Infinity Challengeを解放"},
+      {id:"4-1", name:"挑戦の時", cost:4, requires:["3-1","3-2"], effect:"Infinity Challengeを解放・各リセット後のBall Multiplier開始値を10に変更"},
       {id:"5-1", name:"三途の川はキレイ", cost:10, requires:["4-1"], effect:"Ascension倍率 ×1.60"},
       {id:"5-2", name:"成仏！", cost:10, requires:["4-1"], effect:"Ascension必要スコアの指数を 1.90 に緩和"},
       {id:"6-1", name:"澄んだ世界", cost:50, requires:["5-1"], effect:"Ascension Point式の除数を 100 に変更"},
@@ -426,7 +439,7 @@ class InfinityTreeSystem {
 {id:"8-2",name:"インフィニティの高速取得",cost:350,requires:["7-1","7-2"],effect:"Infinity回数獲得量 ×2（パッシブにも適用）"},
 {id:"9-1", name:"無限が無限に！", cost:200, requires:["8-1","8-2"], effect:"Infinity自動化を解放"},
       {id:"10-1", name:"圧倒的改善", cost:200, requires:["9-1"], effect:"Infinity Point獲得式を log7 ベースに変更"},
-      {id:"11-1", name:"偉大な遺産", cost:12000, requires:["10-1"], effect:"リセット後の初期Score 100・Ascension 2"},
+      {id:"11-1", name:"偉大な遺産", cost:12000, requires:["10-1"], effect:"リセット後の初期Score 100・Ascension 2・IP獲得量 ×1.3"},
       {id:"11-2", name:"うわー、これはひどいや", cost:12500, requires:["10-1"], effect:"共通指数を解放し、+0.20"},
       {id:"12-1", name:"宣伝効果？", cost:100000, requires:["11-2"], effect:"所持IP 2000ごとに通常強化2種へ+1 Lv（最大+4、実績#33取得後は最大+14）"},
       {id:"12-2", name:"ややこしいが間違いなく強い", cost:150000, requires:["11-1"], effect:"1-1をInfinity回数で追加強化"},
@@ -488,7 +501,10 @@ return D(logarithm).floor().sub(307).max(0)
 .mul(s.ic8IPMultiplier)
 .mul(s.hasReward("clear-ic3")||s.hasCompletedIC("ic3")?1.5:1)
 .mul(s.hasReward("clear-ic4")||s.hasCompletedIC("ic4")?2:1)
-.mul(s.fastestInfinityIPMultiplier);
+.mul(s.fastestInfinityIPMultiplier)
+.mul(s.hasInfinityNode("11-1")?1.3:1)
+.mul(s.hasReward("upgrades-3400")?1.2:1)
+.mul(s.achievement36IPMultiplier);
 }
   perform() { this.state.tickPassiveInfinity(); this.state.recordInfinityArrival(); new AchievementSystem(this.state).check(); const gain=this.pendingPoints; if (!this.available || gain.lte(0)) return false; const completed=this.challenges.completeActive(); this.state.infinityPoints=this.state.infinityPoints.add(gain); this.state.infinityCount=this.state.infinityCount.add(this.state.infinityCountGain); this.state.infinityReached=true; new AchievementSystem(this.state).check(); this.state.resetForInfinity(); if (this.state.hasInfinityNode("11-1")) { this.state.score=D(100); this.state.ascensionCount=D(2); this.state.speed=this.state.initialSpeed; } return completed || true; }
 }
