@@ -685,16 +685,25 @@ try{if(typeof value==='string'&&!value.trim())return false;const target=D(value)
   }
   tryInfinity(){const s=this.state;new PunkSystem(s).checkCompletion();if(s.debugOverridesActive||!s.autoInfinity.enabled||!s.hasInfinityNode('9-1'))return false;s.tickPassiveInfinity();s.recordInfinityArrival();const reset=new InfinitySystem(s,new InfinityChallengeSystem(s));if(!reset.available||reset.pendingPoints.lt(s.autoInfinity.targetIP))return false;return Boolean(reset.perform());}
   processBackgroundTick(seconds) { return this.tick(); }
+  resetPurchaseBatch() { this.purchaseRemaining=1000; this.purchaseCursor=0; }
+  purchaseClock() { return typeof performance!=="undefined" ? performance.now() : Date.now(); }
   tick() {
-    if(this.tryInfinity())return 0;
-    if (!this.achievements.autoBuyUnlocked || !this.state.autoBuy.enabled) return 0;
-    let count=0;
-    // Alternate purchases to give both selected upgrades a chance; use the manual buy path.
-    for(let round=0;round<100;round++) {
-      let bought=false;
-      for(const id of ["gain","speed"]) if(this.state.autoBuy[id] && this.upgrades.buy(id)) { count++; bought=true; }
-      if(!bought) break;
+    if(this.tryInfinity()) { this.resetPurchaseBatch(); return 0; }
+    if (!this.achievements.autoBuyUnlocked || !this.state.autoBuy.enabled) { this.resetPurchaseBatch(); return 0; }
+    if(this.purchaseRemaining==null)this.resetPurchaseBatch();
+    const started=this.purchaseClock();
+    let count=0,misses=0;
+    // Share the manual purchase path, including challenge restrictions and Decimal costs.
+    // A logical batch may span ticks: never spend an unbounded time blocking rendering.
+    while(this.purchaseRemaining>0) {
+      const id=["gain","speed"][this.purchaseCursor];
+      this.purchaseCursor=1-this.purchaseCursor;
+      if(this.state.autoBuy[id] && this.upgrades.buy(id)) {
+        count++; this.purchaseRemaining--; misses=0;
+      } else if(++misses>=2) { this.resetPurchaseBatch(); break; }
+      if(count>0 && count%16===0 && this.purchaseClock()-started>=4)break;
     }
+    if(this.purchaseRemaining===0)this.purchaseRemaining=500;
     return count;
   }
 }
@@ -819,7 +828,7 @@ class UIController {
   automationMarkup() {
     const unlocked=this.achievements.autoBuyUnlocked, prefs=this.state.autoBuy;
     const toggle=(key,label)=>`<label class="toggle-row"><input type="checkbox" data-auto-buy="${key}" ${prefs[key] ? "checked" : ""} ${!unlocked ? "disabled" : ""} /> ${label}</label>`;
-    return `<section class="automation-settings"><h2>通常アップグレード自動購入</h2><p>${unlocked ? "解放済み：購入可能なアップグレードを継続して購入します。" : "実績#21「インフィニット！」取得で解放されます。"}</p>${toggle("enabled","通常アップグレード自動購入 ON / OFF")}${toggle("gain","倍率アップグレード自動購入")}${toggle("speed","スピードアップグレード自動購入")}<p class="muted">全体のスイッチがONの間、選択した種類を購入します。設定はリセット後も保持されます。</p></section>${this.autoInfinityMarkup()}`;
+    return `<section class="automation-settings"><h2>通常アップグレード自動購入</h2><p>${unlocked ? "解放済み：購入可能なアップグレードを継続して購入します。" : "実績#21「インフィニット！」取得で解放されます。"}</p>${toggle("enabled","通常アップグレード自動購入 ON / OFF")}${toggle("gain","倍率アップグレード自動購入")}${toggle("speed","スピードアップグレード自動購入")}<p class="muted">ONの間、買える分を即購入します。最初は合計最大1000件、続きは500件ずつ購入し、重い処理は分割します。設定はリセット後も保持されます。</p></section>${this.autoInfinityMarkup()}`;
   }
   autoInfinityMarkup(){const unlocked=this.state.hasInfinityNode('9-1'),p=this.state.autoInfinity;return `<section class="automation-settings"><h2>Infinity自動実行</h2><p>${unlocked?'獲得予定IPが目標以上になるとInfinityを実行します。':'IU9-1「無限が無限に！」の購入で解放されます。'}</p><form id="auto-infinity-form"><label class="toggle-row"><input id="auto-infinity-enabled" type="checkbox" ${p.enabled?'checked':''} ${unlocked?'':'disabled'}>Infinity自動実行 ON / OFF</label><label for="auto-infinity-target">1回のInfinityで獲得する目標IP</label><input id="auto-infinity-target" type="text" value="${p.targetIP.toString()}" autocomplete="off" spellcheck="false" ${unlocked?'':'disabled'}><p>目標以上で実行（最小1 IP）。例：1000、1e20。所持IPではなく獲得予定IPで判定します。</p><button type="submit" ${unlocked?'':'disabled'}>設定を保存</button><p id="auto-infinity-message" role="status"></p></form><p>現在の獲得予定：<strong id="auto-infinity-preview">${format(this.infinity.pendingPoints)} IP</strong></p></section>`;}
   comingSoonMarkup(name, description) { return `<section class="coming-soon-page"><span class="eyebrow">COMING SOON</span><h2>${name}</h2><p>${description}</p></section>`; }
