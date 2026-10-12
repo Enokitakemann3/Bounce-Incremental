@@ -128,7 +128,7 @@ button { font:inherit; cursor:pointer; }
 .aleph-detail h3,.gem-detail h3 {margin:0 0 10px;}
 .aleph-detail p {margin:5px 0;}
 .aleph-scroll {height:55vh;min-height:280px;overflow:auto;overscroll-behavior:contain;border:1px solid #465449;border-radius:14px;background:radial-gradient(ellipse at 50% 10%,#243a32,#18221f 70%);}
-.aleph-canvas {position:relative;width:800px;height:1140px;margin:auto;}
+.aleph-canvas {position:relative;width:800px;height:1500px;margin:auto;}
 .aleph-canvas svg {position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
 .aleph-canvas path {stroke:#526353;stroke-width:5;fill:none;}
 .aleph-canvas path.owned {stroke:#bdd58b;}
@@ -144,6 +144,8 @@ button { font:inherit; cursor:pointer; }
 .gem-detail {padding:20px;border:1px solid #495568;border-radius:14px;background:#202731;}.gem-detail button {margin:4px;}.ec-active {padding:16px;border:1px solid #c8a867;border-radius:12px;}
 @media(max-width:700px){.gem-layout {grid-template-columns:1fr;}.gem-slot {width:58px;height:58px;}.aleph-detail {min-height:175px;}}
 
+
+.aleph-node.sealed {background:#252a30;border-color:#59616b;color:#a7aeb7;cursor:not-allowed;opacity:1;}
 </style>
 </head>
 <body>
@@ -224,8 +226,16 @@ button { font:inherit; cursor:pointer; }
 
 // Test balance: Decimal-compatible values; changing these does not change the save schema.
 const BALANCE = Object.freeze({
+  PrestigeSoftcap3StartExponent: "2500",
+  PrestigeSoftcap3Power: "0.80",
+  AscensionSoftcap2StartExponent: "800",
+  AscensionSoftcap2Power: "0.85",
+  InfinityMultiplierSoftcap1StartExponent: "350",
+  InfinityMultiplierSoftcap1Power: "0.90",
   InfinityPointCap: "1e308",
   NormalUpgradeHeavyCostStart: "8000",
+  InfinityBallSpeedGainSoftcapStart: "1e25",
+  InfinityBallSpeedGainSoftcapPower: "0.7",
   InfinityBallCostSoftcapStart: "1000",
   InfinityBallMilestone4SoftcapMultiplier: "1.5",
   UpgradeExtraCostGrowth: "3",
@@ -259,10 +269,11 @@ const RESET_AUTOMATION = Object.freeze({
   ascension:{achievement:AUTO_ASCENSION_ACHIEVEMENT_ID,enabled:'autoAscensionEnabled',initial:'autoAscensionInitialAP',multiplier:'autoAscensionMultiplier',target:'currentAutoAscensionTarget',unit:'AP'}
 });
 const CONFIG = {
-    releaseVersion: "0.7.1",
+    releaseVersion: "0.7.2",
 
     patchNotesKey: "prestige-ascension-last-seen-version",
     patchNotes: [
+ "v0.7.2：Nuke / Atom・AU1〜4を実装。Nukeは下位リセットなし。Atomはオフライン対応。EC6を有効化。",
  "v0.7.1：Eternity Challenge難易度1、アレフツリー1〜16、8色のジェム購入・装着・レベルアップを追加。Nuke／Contain／PC6〜8本体は仕様待ち。",
  "v0.7.0：Eternity実装。PC5クリア＋IP1e308で実行。EP・Σボーナス・回数マイルストーン・EC記録・Break Eternity・上位自動化を追加。未確定要素は詳細未実装として表示。",
  "v0.6.1：IU19-1「輝くスフィア」を追加。Punkマイルストーン3でP.mult SC2指数+0.04。更新通知は確認後、次回更新まで非表示。",
@@ -357,8 +368,10 @@ class PunkSystem{
  sphereChanceAt(now){return this.sphereChanceBase.mul(now<this.p.dilemma.until?D(1).add(this.p.dilemma.modifier):1).max(0);}
  get sphereChance(){return this.sphereChanceAt(Date.now());}
  get sphereGain(){return D(this.state.hasPunkMilestone(5)?this.state.milestoneMultiplier(10):1).mul(this.state.eternityBonus('sphereGain')).mul(D(1).add(this.state.gems.normal('yellow','.1','.2')));}
+ sphereGainAtChance(chance){return this.sphereGain.add(D(chance).sub(1).max(0));}
+ get effectiveSphereGain(){return this.sphereGainAtChance(this.sphereChance);}
  get sphereChecksPerSecond(){return D(1);}
- queueSeconds(seconds,chance){const cycles=this.sphereChecksPerSecond.mul(seconds).add(this.p.phase),checks=cycles.floor();this.p.phase=cycles.sub(checks);if(checks.lte(0))return;const p=chance.min(1),last=this.p.pending.at(-1);if(last&&last.chance.eq(p)&&last.gain.eq(this.sphereGain))last.checks=last.checks.add(checks);else this.p.pending.push({checks,chance:p,gain:this.sphereGain});}
+ queueSeconds(seconds,chance){const cycles=this.sphereChecksPerSecond.mul(seconds).add(this.p.phase),checks=cycles.floor();this.p.phase=cycles.sub(checks);if(checks.lte(0))return;const p=D(chance).clamp(0,1),gain=this.sphereGainAtChance(chance),last=this.p.pending.at(-1);if(last&&last.chance.eq(p)&&last.gain.eq(gain))last.checks=last.checks.add(checks);else this.p.pending.push({checks,chance:p,gain});}
  tick(now=Date.now()){
   const p=this.p,from=p.lastAt;if(now>from){p.lastAt=now;if(p.count.gte(1)){const split=Math.min(now,Math.max(from,p.dilemma.until));if(split>from)this.queueSeconds((split-from)/1000,this.sphereChanceAt(from));if(now>split)this.queueSeconds((now-split)/1000,this.sphereChanceBase);}}
   // Geometric skipping samples independent trials exactly, bounded work per tick.
@@ -375,6 +388,41 @@ class PunkSystem{
  buyUpgrade(id){const cost=this.upgradeCost(id);if(id==='criticalChance'&&this.p.upgrades.criticalChance.gte(241))return false;if(this.p.count.lt(1)||cost===null||cost.lte(0)||this.p.spheres.lt(cost))return false;this.tick();this.p.spheres=this.p.spheres.sub(cost);this.p.upgrades[id]=this.p.upgrades[id].add(1);return true;}
 }
 
+const NUKE_CONFIG=Object.freeze({maxCount:175,firstExponent:'40000',firstGrowth:'1.5',firstEnd:50,secondGrowth:'1.1',secondEnd:100,lateDivisor:'10',latePower:'10',lateGrowth:'1.1',atomTickPower:'.10',atomBase:'2',atomDoubleEvery:'5',bonuses:{sigma:'1.01',sphere:'1.02',atom:'1.01',ep:'1.05'}});
+const NUKE_MILESTONES=[]; // Future rows: {id, count, description, effect:{atomGain:Decimal-compatible multiplier}}.
+const ATOM_UPGRADES=[
+ {id:'au1',name:'通常ボール速度SC遅延',max:10,effectBase:'2',effectDivisor:'5',costBase:'10',costGrowth:'2.5'},
+ {id:'au2',name:'Infinity Ball速度SC軽減',max:50,effectDivisor:'100',costBase:'25',costGrowth:'1.6'},
+ {id:'au3',name:'複数SC開始点遅延',max:40,effectDivisor:'10',costBase:'1000',costGrowth:'1.8'},
+ {id:'au4',name:'通常ボール速度指数強化',max:10,effectDivisor:'10',costExponent:'8',costLinear:'.35',costQuadratic:'.035'}
+];
+function loadNuke(data={}){const n=data||{};return {count:readDecimal(n.count).floor().min(NUKE_CONFIG.maxCount),freeCount:readDecimal(n.freeCount),milestones:Array.isArray(n.milestones)?n.milestones.filter(id=>NUKE_MILESTONES.some(m=>m.id===id)):[]};}
+function loadAtom(data={}){const a=data||{};return {amount:readDecimal(a.amount),levels:Object.fromEntries(ATOM_UPGRADES.map(u=>[u.id,readDecimal(a.levels?.[u.id]).floor().min(u.max)])),lastAt:typeof a.lastAt==='number'&&Number.isFinite(a.lastAt)?a.lastAt:Date.now()};}
+class NukeSystem{
+ constructor(state){this.state=state;}
+ get data(){return this.state.eternity.nuke;}
+ get atom(){return this.state.eternity.atom;}
+ get count(){return this.data.count.add(this.data.freeCount).min(NUKE_CONFIG.maxCount);}
+ requirementExponent(n){n=D(n);if(n.lt(1)||n.gt(NUKE_CONFIG.maxCount))return null;const a=NUKE_CONFIG,e50=D(a.firstExponent).mul(finitePower(a.firstGrowth,a.firstEnd-1));if(n.lte(a.firstEnd))return D(a.firstExponent).mul(finitePower(a.firstGrowth,n.sub(1)));if(n.lte(a.secondEnd))return e50.mul(finitePower(a.secondGrowth,n.sub(a.firstEnd)));const delta=n.sub(a.secondEnd),e100=e50.mul(finitePower(a.secondGrowth,a.secondEnd-a.firstEnd));return e100.mul(finitePower(D(1).add(delta.div(a.lateDivisor)),D(a.latePower).mul(finitePower(a.lateGrowth,delta).sub(1))));}
+ get nextExponent(){return this.requirementExponent(this.count.floor().add(1));}
+ get blockReason(){if(!this.state.nukeAllowed)return 'EC6中はNukeを実行できません';if(this.count.gte(NUKE_CONFIG.maxCount))return '現在の暫定上限：175回';if(this.state.score.lte(0)||D(this.state.score.log10()).lt(this.nextExponent))return '必要Score未達';return '';}
+ get available(){return !this.blockReason;}
+ perform(now=Date.now()){if(!this.available)return false;settleEternityEffects(this.state,now);this.data.count=this.data.count.add(1);this.refreshMilestones();return true;}
+ refreshMilestones(){for(const m of NUKE_MILESTONES)if(this.count.gte(m.count)&&!this.data.milestones.includes(m.id))this.data.milestones.push(m.id);}
+ milestoneMultiplier(key){this.refreshMilestones();return NUKE_MILESTONES.filter(m=>this.data.milestones.includes(m.id)).reduce((value,m)=>value.mul(m.effect?.[key]??1),D(1));}
+ bonus(id){return D(1).add(finitePower(NUKE_CONFIG.bonuses[id],this.count).sub(1).mul(this.state.nukeRewardMultiplier));}
+ level(id){return this.atom.levels[id]??D(0);}
+ effect(id,level=this.level(id)){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return D(1);const l=D(level),boost=this.bonus('atom');if(id==='au1')return D(1).add(finitePower(u.effectBase,l.div(u.effectDivisor)).sub(1).mul(boost));if(id==='au2')return l.div(u.effectDivisor).mul(boost).clamp(0,1);return D(1).add(l.div(u.effectDivisor).mul(boost));}
+ cost(id){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u||this.level(id).gte(u.max))return null;const l=this.level(id);return u.costBase?D(u.costBase).mul(finitePower(u.costGrowth,l)):finitePower(10,D(u.costExponent).add(l.mul(u.costLinear)).add(l.pow(2).mul(u.costQuadratic)));}
+ buy(id,now=Date.now()){const cost=this.cost(id);if(cost===null||this.count.lt(1))return false;this.tick(now);if(this.atom.amount.lt(cost))return false;settleEternityEffects(this.state,now);this.atom.amount=this.atom.amount.sub(cost);this.atom.levels[id]=this.level(id).add(1);delete this.state._treeSpeedCache;return true;}
+ buyMax(id,now=Date.now()){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return 0;let bought=0;while(bought<u.max&&this.buy(id,now))bought++;return bought;}
+ get ticksPerSecond(){return this.count.lt(1)?D(0):finitePower(this.state.effectiveSpeed,this.state.atomTickPower).mul(this.state.atomTickSpeedMultiplier);}
+ get perTick(){return this.count.lt(1)?D(0):finitePower(NUKE_CONFIG.atomBase,this.count.sub(1).div(NUKE_CONFIG.atomDoubleEvery));}
+ get gainMultiplier(){return this.state.atomGainMultiplier.mul(this.milestoneMultiplier('atomGain'));}
+ get perSecond(){return this.ticksPerSecond.mul(this.perTick).mul(this.gainMultiplier);}
+ tick(now=Date.now()){const seconds=Math.max(0,now-this.atom.lastAt)/1000;this.atom.lastAt=Math.max(now,this.atom.lastAt);if(!seconds||this.count.lt(1))return D(0);const gain=this.perSecond.mul(seconds);this.atom.amount=this.atom.amount.add(gain);return gain;}
+}
+
 const ETERNITY_BONUSES=Object.freeze({speed:['1.5','100'],gain:['1.25','100'],critical:['10','100'],sphereGain:['10','1e10'],sphereChance:['2','1e10'],ip:['1.25','1000']});
 const ETERNITY_MILESTONES=[[1,'Infinity Ballの初期強化Lv+5'],[2,'独立したEternity倍率を解放'],[3,'Prestigeで進行をリセットしない'],[4,'Eternity後Score 1000で開始'],[6,'Ascension必要Scoreの上昇指数−0.1'],[8,'Eternity後P.mult 2で開始'],[12,'Ascensionで進行をリセットしない'],[20,'Infinity Ball自動化'],[27,'Ascension由来の倍率獲得量加算+0.5／EC解放'],[44,'Punkで進行をリセットしない'],[88,'通常強化の初期Lv+1000'],[128,'Sphere Upgrade自動購入'],[200,'P.mult SC1・SC2／A.mult SC1撤廃'],[500,'Infinity BallにCritical適用'],[1000,'毎秒、Infinity獲得予定IPの50%を自動獲得']];
 const EC_MILESTONES=[[2,'EP獲得量×ECクリア数'],[4,'Eternity後もICクリア状態を保持'],[5,'Break Eternity：IP・Score上限撤廃'],[7,'Nukeボーナス強化（詳細未確定）'],[10,'Gem Power +10%'],[15,'通常Eternity Line強化（詳細未確定）'],[20,'Atom獲得量×10000']];
@@ -382,7 +430,7 @@ function eternitySoftcap(value,threshold){value=D(value);threshold=D(threshold);
 function loadEternity(data={}){
  const e=data&&typeof data==='object'?data:{};
  const ecClears=Object.fromEntries(Array.from({length:10},(_,i)=>['ec'+(i+1),{1:e.ecClears?.['ec'+(i+1)]?.[1]===true,2:e.ecClears?.['ec'+(i+1)]?.[2]===true}]));
- return {schema:1,points:readDecimal(e.points),ecClears,automation:{ballCreate:e.automation?.ballCreate===true,ballSpeed:e.automation?.ballSpeed===true,ballGain:e.automation?.ballGain===true,sphere:e.automation?.sphere===true},lastPassiveAt:typeof e.lastPassiveAt==='number'&&Number.isFinite(e.lastPassiveAt)?e.lastPassiveAt:Date.now(),activeChallenge:ETERNITY_CHALLENGES.some(c=>c.id===e.activeChallenge&&!c.pending)?e.activeChallenge:null,gem:loadGems(e.gem),alephTree:{purchased:Array.isArray(e.alephTree?.purchased)?[...new Set(e.alephTree.purchased.filter(id=>ALEPH_NODES.some(n=>n.id===id)))]:[]},nuke:{...(e.nuke||{}),freeCount:readDecimal(e.nuke?.freeCount)},contain:e.contain||{},containUpgrades:e.containUpgrades||{},line:e.line||{},atom:e.atom||{}};
+ return {schema:1,points:readDecimal(e.points),ecClears,automation:{ballCreate:e.automation?.ballCreate===true,ballSpeed:e.automation?.ballSpeed===true,ballGain:e.automation?.ballGain===true,sphere:e.automation?.sphere===true},lastPassiveAt:typeof e.lastPassiveAt==='number'&&Number.isFinite(e.lastPassiveAt)?e.lastPassiveAt:Date.now(),activeChallenge:ETERNITY_CHALLENGES.some(c=>c.id===e.activeChallenge&&!c.pending)?e.activeChallenge:null,gem:loadGems(e.gem),alephTree:{purchased:Array.isArray(e.alephTree?.purchased)?[...new Set(e.alephTree.purchased.filter(id=>ALEPH_NODES.some(n=>n.id===id&&!n.placeholder)))]:[]},nuke:loadNuke(e.nuke),contain:e.contain||{},containUpgrades:e.containUpgrades||{},line:e.line||{},atom:loadAtom(e.atom)};
 }
 const ETERNITY_CHALLENGES=[
  {id:'ec1',name:'何よりも遅い',goal:'1e308',restriction:'ボール速度 ^0.5',reward:'速度に速度^1.2を乗算。補正前速度が200万超ならlog10(速度^1.2)を乗算'},
@@ -390,7 +438,7 @@ const ETERNITY_CHALLENGES=[
  {id:'ec3',name:'タイヤがパンク！',goal:'1e4500',restriction:'Punk実行不可',reward:'倍率獲得量の初期値 +10% × 累計Punk回数'},
  {id:'ec4',name:'カナヅチ',goal:'1e1000',restriction:'Ascension実行不可・A.mult 0.5固定',reward:'A.multの初期値10'},
  {id:'ec5',name:'輝きを失った',goal:'1e3500',restriction:'ジェムの効果量 ÷5',reward:'ジェム購入ごとの価格上昇倍率 ÷2'},
- {id:'ec6',name:'撃墜された',goal:'1e5000',restriction:'Nuke実行不可',reward:'無料Nuke回数 +1',pending:'Nuke本体の仕様待ち'},
+ {id:'ec6',name:'撃墜された',goal:'1e35000',restriction:'Nuke実行不可',reward:'無料Nuke回数 +1',pending:null},
  {id:'ec7',name:'木は枯れ果てた',goal:'1e10000',restriction:'アレフツリー効果無効（購入状態は保持）',reward:'アレフ5の効果 ×2'},
  {id:'ec8',name:'根底から崩れる',goal:'1e1050',restriction:'共通指数 ×0.4',reward:'共通指数 ×1.1'},
  {id:'ec9',name:'2大巨頭',goal:'1e15000',restriction:'共通指数 ÷2・速度／倍率獲得量の購入上限Lv6000',reward:'通常強化のScore消費・必要Scoreを撤廃、Lv8000の追加コストSC撤廃'},
@@ -414,6 +462,8 @@ const ALEPH_NODES=[
  [15,'実りの季節','1e145',[13,14],-1,8,'ジェム価格上昇倍率 10 → 5'],
  [16,'封印の根','1e300',[14,15],1,8,'Contain解放（本体は仕様待ち）']
 ].map(([id,name,cost,requires,x,row,effect])=>({id,name,cost,requires,x,row,effect}));
+// Future roots: geometry only; no purchasable effects or invented unlock requirements.
+ALEPH_NODES.push(...[[17,[1],0,-1],[18,[17],-1,-2],[19,[17],1,-2],[20,[18],-2,-3],[21,[19],2,-3]].map(([id,requires,x,row])=>({id,requires,x,row,placeholder:true})));
 const GEM_DEFINITIONS=[
  ['red','赤','#ee6972','速度・倍率獲得量 +20%、以後+10ポイント/Lv','共通指数 ×1.10/Lv'],
  ['blue','青','#70afff','EP・ΣボーナスSC開始 +10%、以後+5ポイント/Lv','Σ獲得量 +10%/Lv'],
@@ -432,7 +482,7 @@ function loadGems(data={}){
  return {inventory,equipped:Array.isArray(g.equipped)?[...new Set(g.equipped.filter(id=>inventory[id]?.level>0))]:[],purchases:readDecimal(g.purchases).floor(),priceResetAt:g.priceResetAt==null?null:readDecimal(g.priceResetAt).floor()};
 }
 function settleEternityEffects(state,now=Date.now()){
- new EternitySystem(state).tickPassive(now);state.tickPassiveInfinity(now);new PunkSystem(state).tick(now);new InfinityBallSystem(state,null,new AchievementSystem(state)).tick(now);
+ new NukeSystem(state).tick(now);new EternitySystem(state).tickPassive(now);state.tickPassiveInfinity(now);new PunkSystem(state).tick(now);new InfinityBallSystem(state,null,new AchievementSystem(state)).tick(now);
 }
 class GemSystem{
  constructor(state,rng=Math.random){this.state=state;this.rng=rng;}
@@ -459,30 +509,36 @@ class GemSystem{
 class AlephTreeSystem{
  constructor(state){this.state=state;}
  get(id){return ALEPH_NODES.find(n=>n.id===id);}
- canBuy(id){const node=this.get(id);return !!node&&this.state.eternityCount.gte(1)&&!this.state.eternity.alephTree.purchased.includes(id)&&node.requires.every(n=>this.state.eternity.alephTree.purchased.includes(n))&&this.state.eternity.points.gte(node.cost);}
+ // Nodes 13+ await their explicit progression requirements. Purchased legacy nodes remain available.
+ meetsUnlockCondition(id){return id<=12;}
+ isRevealed(id){const node=this.get(id);return !!node&&!node.placeholder&&(this.state.eternity.alephTree.purchased.includes(id)||this.meetsUnlockCondition(id));}
+ canBuy(id){const node=this.get(id);return this.isRevealed(id)&&this.state.eternityCount.gte(1)&&!this.state.eternity.alephTree.purchased.includes(id)&&node.requires.every(n=>this.state.eternity.alephTree.purchased.includes(n))&&this.state.eternity.points.gte(node.cost);}
  buy(id){if(!this.canBuy(id))return false;settleEternityEffects(this.state);this.state.eternity.points=this.state.eternity.points.sub(this.get(id).cost);this.state.eternity.alephTree.purchased.push(id);new GemSystem(this.state).applyPriceReset();new PunkSystem(this.state).refreshUnlocks();return true;}
 }
 class EternityChallengeSystem{
  constructor(state){this.state=state;}
  get active(){return ETERNITY_CHALLENGES.find(c=>c.id===this.state.activeEC);}
  canStart(id){const c=ETERNITY_CHALLENGES.find(c=>c.id===id);return !!c&&!c.pending&&this.state.hasEternityMilestone(27)&&!this.state.activeEC&&!this.state.activeIC&&!this.state.activePC&&!this.state.debugOverridesActive;}
- start(id,now=Date.now()){if(!this.canStart(id))return false;this.state.eternity.activeChallenge=id;new EternitySystem(this.state).resetLower(now);return true;}
- finish(clear=false,now=Date.now()){const c=this.active;if(!c)return false;if(clear&&this.state.score.lt(c.goal))return false;if(clear)new EternitySystem(this.state).recordChallengeClear(c.id,1);new EternitySystem(this.state).resetLower(now,null);return true;}
+ start(id,now=Date.now()){if(!this.canStart(id))return false;new NukeSystem(this.state).tick(now);this.state.eternity.activeChallenge=id;new EternitySystem(this.state).resetLower(now);return true;}
+ finish(clear=false,now=Date.now()){const c=this.active;if(!c)return false;if(clear&&this.state.score.lt(c.goal))return false;new NukeSystem(this.state).tick(now);if(clear)new EternitySystem(this.state).recordChallengeClear(c.id,1);new EternitySystem(this.state).resetLower(now,null);return true;}
  checkCompletion(){return !!this.active&&this.state.score.gte(this.active.goal)&&this.finish(true);}
 }
 
 class EternitySystem{
  constructor(state){this.state=state;this.purchaseCursor=0;}
- get available(){return !this.state.activeEC&&this.state.hasPC('pc5')&&this.state.infinityPoints.gte('1e308')&&!this.state.debugOverridesActive;}
+ get blockReason(){if(this.state.activeEC)return 'Eternity Challengeを退出してください';if(!this.state.hasPC('pc5'))return 'PC5のクリアが必要です';if(this.state.infinityPoints.lt('1e308'))return '所持IPが1e308未満です';return '';}
+ get available(){return !this.blockReason;}
  get pendingPoints(){if(!this.available)return D(0);const base=D(this.state.infinityPoints.log10()).sub(307).add(this.state.gems.high('purple').mul(2)).max(0);return base.mul(this.state.ecClearCount>=2?this.state.milestoneMultiplier(this.state.ecClearCount):1).mul(this.state.epMultiplier);}
  recordChallengeClear(id,difficulty){if(!/^ec(?:[1-9]|10)$/.test(id)||![1,2].includes(difficulty))return false;const row=this.state.eternity.ecClears[id];if(row[difficulty])return false;row[difficulty]=true;if(id==='ec6'&&difficulty===1)this.state.eternity.nuke.freeCount=this.state.eternity.nuke.freeCount.add(this.state.challengePower);return true;}
  perform(now=Date.now()){
   if(!this.available)return false;
-  const s=this.state;new AchievementSystem(s).check();
+  const s=this.state;new NukeSystem(s).tick(now);new AchievementSystem(s).check();
   const ep=this.pendingPoints,nextCount=s.eternityCount.add(s.eternityCountGain),eternity=s.eternity;
+  debugOverrideControllers.get(s)?.clearAll();
   eternity.points=eternity.points.add(ep);s.eternityCount=nextCount;this.resetLower(now,null);new AchievementSystem(s).check();return true;
  }
  resetLower(now=Date.now(),activeChallenge=this.state.activeEC){
+  new NukeSystem(this.state).tick(now);
   const s=this.state,eternity=s.eternity,nextCount=s.eternityCount;eternity.lastPassiveAt=now;
   const retainedIC=s.ecClearCount>=4?[...s.completedInfinityChallenges]:[];
   const retainedNodes=s.hasAleph(3)?[...s.infinityNodes]:[],retainedPC=s.hasAleph(7)?[...s.punk.clearedPC]:[];
@@ -553,17 +609,23 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   get punkInfinityScoreExponentText(){return `^${formatMultiplier(this.punkInfinityScoreExponent)}${this.hasPC("pc1")?"（PC1報酬・累計Punk回数を反映）":"（PC1未クリア）"}`;}
   get punkInfinityScoreExponent(){return this.hasPC('pc1')?this.effectiveCommonExponent.div(2).add(this.punk.count.max(0).mul('.077')).max(1):D(1);}
   get pc2CostMultiplier(){return this.hasPC('pc2')?finitePower('0.90',this.punk.count):D(1);}
-  get criticalChance(){if(this.activePC==='pc3')return D(1);return (this.punk.count.gte(1)?this.punk.upgrades.criticalChance.sub(1).mul('.001').add('.01').min('.25'):D(0)).add(this.hasAleph(2)?this.alephAddition('.15'):0).min(1);}
-  get criticalPerLevelBoost(){const lv=this.punk.upgrades.criticalPower,sc=PUNK_CONFIG.criticalPowerSoftcapLevel;return sc===null?Decimal.pow('1.1',lv):Decimal.pow('1.1',lv.min(sc)).mul(Decimal.pow('1.005',lv.sub(sc).max(0)));}
+  get criticalChance(){if(this.activePC==='pc3')return D(1);return (this.punk.count.gte(1)?this.punk.upgrades.criticalChance.sub(1).mul('.001').mul(this.nukeSystem.bonus('sphere')).add('.01').min('.25'):D(0)).add(this.hasAleph(2)?this.alephAddition('.15'):0).min(1);}
+  get baseCriticalPerLevelBoost(){const lv=this.punk.upgrades.criticalPower,sc=PUNK_CONFIG.criticalPowerSoftcapLevel;return sc===null?Decimal.pow('1.1',lv):Decimal.pow('1.1',lv.min(sc)).mul(Decimal.pow('1.005',lv.sub(sc).max(0)));}
+  get criticalPerLevelBoost(){return D(1).add(this.baseCriticalPerLevelBoost.sub(1).mul(this.nukeSystem.bonus('sphere')));}
   get criticalMultiplier(){if(this.activePC==='pc3')return D("0.5");const base=PUNK_CONFIG.normalCriticalBase===null?D(1):D(PUNK_CONFIG.normalCriticalBase).add(readDecimal(this.upgradeLevels.critical).mul(PUNK_CONFIG.normalCriticalPerLevel).mul(this.criticalPerLevelBoost));return base.mul(this.hasPunkMilestone(3)?this.milestoneMultiplier(100):1).mul(this.hasPC('pc3')?this.challengeMultiplier(100):1).mul(this.eternityBonus('critical')).mul(D(1).add(this.gems.high('yellow').mul('.5')));}
   hasEternityMilestone(count){return this.eternityCount.gte(count);}
   get ecClearCount(){return Object.values(this.eternity.ecClears).reduce((n,row)=>n+Number(row[1])+Number(row[2]),0);}
   get eternityBroken(){return this.ecClearCount>=5;}
   capInfinityPoints(value){return this.eternityBroken?D(value).max(0):D(value).max(0).min(BALANCE.InfinityPointCap);}
-  eternityBonus(id){const [base,threshold]=ETERNITY_BONUSES[id];return this.milestoneMultiplier(eternitySoftcap(finitePower(base,this.eternityCount),D(threshold).mul(D(1).add(this.gems.normal("blue",".1",".05")))));}
+  eternityBonus(id){const [base,threshold]=ETERNITY_BONUSES[id];return this.milestoneMultiplier(eternitySoftcap(finitePower(base,this.eternityCount),D(threshold).mul(D(1).add(this.gems.normal("blue",".1",".05"))))).mul(this.nukeSystem.bonus("sigma"));}
   get eternityMultiplier(){return this.hasEternityMilestone(2)?this.eternityCount.mul("1.05").mul(this.milestonePower).add(1):D(1);}
-  get eternityAvailable(){return this.hasPC('pc5')&&this.infinityPoints.gte('1e308');}
+  get eternityAvailable(){return new EternitySystem(this).available;}
 
+  get nukeSystem(){return this._nukeSystem||(this._nukeSystem=new NukeSystem(this));}
+  delayedAtomSoftcapExponent(base){return D(base).add(D(this.nukeSystem.effect('au3').log10()));}
+  get normalSpeedSoftcapStart(){return D(CONFIG.speedUpgradeSoftCap).mul(this.nukeSystem.effect('au1'));}
+  get atomSpeedExponent(){return this.nukeSystem.effect('au4');}
+  get infinityBallSpeedSoftcapPower(){const p=D(BALANCE.InfinityBallSpeedGainSoftcapPower);return p.add(D(1).sub(p).mul(this.nukeSystem.effect('au2')));}
   get activeEC(){return this.eternity.activeChallenge;}
   hasEC(id){return this.eternity.ecClears[id]?.[1]===true;}
   hasAleph(id){return this.activeEC!=='ec7'&&this.eternity.alephTree.purchased.includes(id);}
@@ -578,9 +640,9 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   get alephBallGain(){if(!this.hasAleph(1))return D(1);const n=this.eternityCount;return this.alephMultiplier(n.gt(5000)?D(n.mul('.5').max(1).log10()).add(1):n.mul('.5').add(1));}
   get alephIPMultiplier(){if(!this.hasAleph(4))return D(1);const x=this.eternity.points.div(2).max(1),raw=D(x.log(5));return this.alephMultiplier((raw.gt(100)?D(x.log(12)):raw).max(1));}
   get eternityCountGain(){let gain=this.hasAleph(5)?this.alephMultiplier(D(2).mul(this.hasEC('ec7')?this.challengeMultiplier(2):1)):D(1);return gain.mul(D(1).add(this.gems.high('blue').mul('.1')));}
-  get epMultiplier(){return D(this.hasAleph(9)?this.alephMultiplier(2):1).mul(this.hasAleph(14)?this.alephMultiplier(100):1).mul(D(1).add(this.gems.normal('blue','.1','.05')));}
+  get epMultiplier(){return D(this.hasAleph(9)?this.alephMultiplier(2):1).mul(this.hasAleph(14)?this.alephMultiplier(100):1).mul(D(1).add(this.gems.normal('blue','.1','.05'))).mul(this.nukeSystem.bonus('ep'));}
   get atomGainMultiplier(){const raw=this.eternityCount.max(1),a=D(raw.log10());const tree=this.hasAleph(11)?this.alephMultiplier((a.gt(10)?D(raw.log(15)):a).max(1)):D(1);return tree.mul(this.gems.greenAtomMultiplier).mul(this.ecClearCount>=20?this.milestoneMultiplier(10000):1);}
-  get atomTickPower(){return D('.1').add(this.hasAleph(12)?this.alephAddition('.01'):0).add(this.gems.high('white').mul('.01'));}
+  get atomTickPower(){return D(NUKE_CONFIG.atomTickPower).add(this.hasAleph(12)?this.alephAddition('.01'):0).add(this.gems.high('white').mul('.01'));}
   get atomTickSpeedMultiplier(){return D(1).add(this.gems.normal('white','.02','.01'));}
   get nukeRewardMultiplier(){return D(this.hasAleph(10)?this.alephMultiplier('1.5'):1).mul(D(1).add(this.gems.normal('green','.1','.03')));}
   get nukeAllowed(){return this.activeEC!=='ec6';}
@@ -590,28 +652,25 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   get expandedPCUnlocked(){return this.hasAleph(8);}
   get ic2SoftcapPower(){return D(this.hasCompletedIC('ic2')?BALANCE.PrestigeSoftcap1IC2Power:BALANCE.PrestigeSoftcap1Power);}
   get ic3SpeedPower(){return D(this.activeIC==='ic3'?'.9':this.hasCompletedIC('ic3')?'1.25':1);}
-  get ecSpeedMultiplier(){const base=this.preECSpeed;if(!this.hasEC('ec1'))return D(1);const exponent=D('1.2');return base.gt(CONFIG.speedUpgradeSoftCap)?D(base.max(1).log10()).mul(exponent).max(1):finitePower(base,exponent).max(1);}
+  get ecSpeedMultiplier(){const base=this.preECSpeed;if(!this.hasEC('ec1'))return D(1);const exponent=D('1.2');return base.gt(this.normalSpeedSoftcapStart)?D(base.max(1).log10()).mul(exponent).max(1):finitePower(base,exponent).max(1);}
 
   get activeIC() { return this.activeInfinityChallenge; }
   get rawPrestigeMultiplier(){return this.prestigePoints.mul(.5).add(1);}
-get prestigeSoftcapStage(){
-  const p=D(this.rawPrestigeMultiplier.log10()),start=D(BALANCE.PrestigeSoftcap1StartExponent);
-  if(this.hasEternityMilestone(200))return 0;
-  if(this.hasPunkMilestone(1))return p.gt(this.prestigeSoftcap2StartExponent)?2:0;
-  if(p.lte(start))return 0;
-  const afterSC1=start.add(p.sub(start).pow(this.hasCompletedIC("ic2")?BALANCE.PrestigeSoftcap1IC2Power:BALANCE.PrestigeSoftcap1Power));
-  return afterSC1.gt(this.prestigeSoftcap2StartExponent)?2:1;
-}
+get prestigeSoftcapStage(){return this.prestigeSoftcapResult.stage;}
 get prestigeSoftcapped(){return this.prestigeSoftcapStage>0;}
 get prestigeSoftcap2Power(){return D(BALANCE.PrestigeSoftcap2Power).add(this.hasPunkMilestone(3)?this.milestonePower.mul("0.04"):0);}
 get prestigeSoftcap2StartExponent(){if(this.hasReward("punk-milestone-3"))return BALANCE.Achievement53PrestigeSC2Start;return this.hasReward("second-ball")?BALANCE.PrestigeSoftcap2Achievement41StartExponent:BALANCE.PrestigeSoftcap2StartExponent;}
-get softcappedPrestigeMultiplier(){
-  const raw=this.rawPrestigeMultiplier;if(this.hasEternityMilestone(200))return raw;let p=D(raw.log10());
-  if(p.lte(BALANCE.PrestigeSoftcap1StartExponent))return raw;
-  if(!this.hasPunkMilestone(1))p=D(BALANCE.PrestigeSoftcap1StartExponent).add(p.sub(BALANCE.PrestigeSoftcap1StartExponent).pow(this.hasCompletedIC("ic2")?BALANCE.PrestigeSoftcap1IC2Power:BALANCE.PrestigeSoftcap1Power));
-  if(p.gt(this.prestigeSoftcap2StartExponent))p=D(this.prestigeSoftcap2StartExponent).add(p.sub(this.prestigeSoftcap2StartExponent).pow(this.prestigeSoftcap2Power));
-  return finitePower(10,p);
+get prestigeSoftcapResult(){
+ const raw=this.rawPrestigeMultiplier;let p=D(raw.log10()),stage=0;
+ const apply=(at,power,n)=>{if(p.gt(at)){p=D(at).add(p.sub(at).pow(power));stage=n;}};
+ if(!this.hasEternityMilestone(200)){
+  if(!this.hasPunkMilestone(1))apply(BALANCE.PrestigeSoftcap1StartExponent,this.hasCompletedIC('ic2')?BALANCE.PrestigeSoftcap1IC2Power:BALANCE.PrestigeSoftcap1Power,1);
+  apply(this.prestigeSoftcap2StartExponent,this.prestigeSoftcap2Power,2);
+ }
+ apply(this.delayedAtomSoftcapExponent(BALANCE.PrestigeSoftcap3StartExponent),BALANCE.PrestigeSoftcap3Power,3);
+ return {value:stage?finitePower(10,p):raw,stage};
 }
+get softcappedPrestigeMultiplier(){return this.prestigeSoftcapResult.value;}
 get prestigeMultiplier(){const effective=this.softcappedPrestigeMultiplier;return (this.activeIC==="ic8"?finitePower(effective,.7):effective).mul(this.activePC==="pc2"?.5:1);}
 get ic8IPMultiplier(){return this.hasCompletedIC("ic8")?this.challengeMultiplier(this.prestigeMultiplier.div("1e20").max(1).min(5)):D(1);}
 get ic8Hardcapped(){return this.hasCompletedIC("ic8")&&this.prestigeMultiplier.gte("5e20");}
@@ -620,7 +679,9 @@ get fastestInfinitySeconds(){if(this.bestInfinityTime===null)return null;try{con
 get fastestInfinityIPMultiplier(){const t=this.fastestInfinitySeconds;return this.hasInfinityNode("15-1")&&t?D(D(60).div(t).add(1).log10()).pow(2).add(1):D(1);}
 get passiveInfinityRate(){const t=this.fastestInfinitySeconds;return this.hasInfinityNode("13-2")&&t?D(this.hasInfinityNode("8-2")?2:1).div(t):D(0);}
 tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinityLastAt)/1000;this.passiveInfinityLastAt=Math.max(now,this.passiveInfinityLastAt);const gain=this.passiveInfinityRate.mul(dt);this.infinityCount=this.infinityCount.add(gain);return gain;}
-  get infinityMultiplier() { return this.infinityScoreBonus.mul(this.hasInfinityNode("7-2") ? this.infinityCount.div(10).add(1).sqrt() : 1).mul(this.hasReward("critical-100000")?this.criticalMultiplier.mul("0.01"):1); }
+  get rawInfinityMultiplier() { return this.infinityScoreBonus.mul(this.hasInfinityNode("7-2") ? this.infinityCount.div(10).add(1).sqrt() : 1).mul(this.hasReward("critical-100000")?this.criticalMultiplier.mul("0.01").max(1):1); }
+  get infinitySoftcapped(){return D(this.rawInfinityMultiplier.log10()).gt(this.delayedAtomSoftcapExponent(BALANCE.InfinityMultiplierSoftcap1StartExponent));}
+  get infinityMultiplier(){const raw=this.rawInfinityMultiplier,p=D(raw.log10()),start=this.delayedAtomSoftcapExponent(BALANCE.InfinityMultiplierSoftcap1StartExponent);return p.lte(start)?raw:finitePower(10,start.add(p.sub(start).pow(BALANCE.InfinityMultiplierSoftcap1Power)));}
   get achievement36IPMultiplier() { return this.hasReward("ip-1e6") ? D(ACHIEVEMENT_IP_COUNT_IDS.filter(id=>this.hasReward(id)).length).div(2).min(17.5) : D(1); }
   get initialBallMultiplier() { return D(this.hasInfinityNode("4-1") ? 10 : 1); }
   get futureMultiplier() { return this.infinityMultiplier; }
@@ -629,23 +690,26 @@ tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinity
   get rawAscensionMultiplier() { return this.ascensionPoints.mul(0.5).add(this.hasEC("ec4")?this.challengeMultiplier(10):1).mul(this.hasInfinityNode("5-1") ? 1.60 : 1); }
   get ascensionSoftcapStartExponent() { return this.hasReward("second-ball") ? BALANCE.AscensionSoftcap1Achievement41StartExponent : BALANCE.AscensionSoftcap1StartExponent; }
   get ascensionSoftcapPower() { return D(BALANCE.AscensionSoftcap1Power).add(this.hasPunkMilestone(1)?this.milestonePower.mul("0.1"):0); }
-  get ascensionSoftcapped() { return !this.hasEternityMilestone(200) && this.ascensionSoftcapPower.lt(1) && D(this.rawAscensionMultiplier.log10()).gt(this.ascensionSoftcapStartExponent); }
-  get ascensionMultiplier() {
-    if(this.activeEC==="ec4")return D("0.5");
-    const raw=this.rawAscensionMultiplier,a=D(raw.log10());
-    if(this.hasEternityMilestone(200)||this.ascensionSoftcapPower.gte(1)||a.lte(this.ascensionSoftcapStartExponent))return raw;
-    return finitePower(10,D(this.ascensionSoftcapStartExponent).add(a.sub(this.ascensionSoftcapStartExponent).pow(this.ascensionSoftcapPower)));
+  get ascensionSoftcapResult(){
+    if(this.activeEC==='ec4')return {value:D('.5'),stage:0};
+    const raw=this.rawAscensionMultiplier;let a=D(raw.log10()),stage=0;
+    if(!this.hasEternityMilestone(200)&&this.ascensionSoftcapPower.lt(1)&&a.gt(this.ascensionSoftcapStartExponent)){a=D(this.ascensionSoftcapStartExponent).add(a.sub(this.ascensionSoftcapStartExponent).pow(this.ascensionSoftcapPower));stage=1;}
+    const second=this.delayedAtomSoftcapExponent(BALANCE.AscensionSoftcap2StartExponent);if(a.gt(second)){a=second.add(a.sub(second).pow(BALANCE.AscensionSoftcap2Power));stage=2;}
+    return {value:stage?finitePower(10,a):raw,stage};
   }
+  get ascensionSoftcapStage(){return this.ascensionSoftcapResult.stage;}
+  get ascensionSoftcapped(){return this.ascensionSoftcapStage>0;}
+  get ascensionMultiplier(){return this.ascensionSoftcapResult.value;}
   get initialSpeed() { return finiteSpeed(finitePower(1.20, this.ascensionCount).mul(CONFIG.startingSpeed)); }
   get treeAdjustedSpeed() {
     const base=finiteSpeed(this.speed),levels=D(this.infinityUpgradeLevelBonus).max(0),rate=this.speedUpgradeGainRate;
     const iu1=this.hasInfinityNode("1-2")?1.5:1,iu13=this.hasInfinityNode("13-1")?3:1;
     const power=this.activeIC==="ic3"?.9:this.hasCompletedIC("ic3")?1.25:1;
     const permanentSpeed=this.eternityBonus('speed').mul(D(1).add(this.gems.normal('red','.2','.1')));
-    const key=[base.toString(),levels.toString(),rate.toString(),iu1,iu13,power,permanentSpeed.toString(),this.activeEC,this.hasEC('ec1')].join('|');
+    const key=[base.toString(),levels.toString(),rate.toString(),iu1,iu13,power,permanentSpeed.toString(),this.normalSpeedSoftcapStart.toString(),this.atomSpeedExponent.toString(),this.activeEC,this.hasEC('ec1')].join('|');
     if(this._treeSpeedCache?.key===key)return this._treeSpeedCache.value;
     // Convert the displayed 2M threshold back to the stored-speed domain.
-    let displayedThreshold=D(CONFIG.speedUpgradeSoftCap);
+    let displayedThreshold=finitePower(this.normalSpeedSoftcapStart,D(1).div(this.atomSpeedExponent));
     if(this.activeEC==='ec1')displayedThreshold=finitePower(displayedThreshold,2);
     if(this.hasEC('ec1'))displayedThreshold=finitePower(displayedThreshold,D(1).div('2.2'));
     const threshold=displayedThreshold.div(permanentSpeed).div(iu13).pow(1/power).div(iu1);
@@ -672,13 +736,13 @@ tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinity
     speed = this.activeIC==="ic3" ? finitePower(speed,.9) : this.hasCompletedIC("ic3") ? finitePower(speed,1.25) : speed;
     return finiteSpeed(speed.mul(this.hasInfinityNode("13-1")?3:1).mul(this.eternityBonus("speed")).mul(D(1).add(this.gems.normal("red",".2",".1"))));
   }
-  get effectiveSpeed(){const base=this.preECSpeed,multiplier=!this.hasEC("ec1")?D(1):base.gt(CONFIG.speedUpgradeSoftCap)?D(base.max(1).log10()).mul("1.2").max(1):finitePower(base,"1.2").max(1);const speed=base.mul(multiplier);return finiteSpeed(this.activeEC==="ec1"?finitePower(speed,".5"):speed);}
+  get effectiveSpeed(){const base=this.preECSpeed,multiplier=!this.hasEC("ec1")?D(1):base.gt(this.normalSpeedSoftcapStart)?D(base.max(1).log10()).mul("1.2").max(1):finitePower(base,"1.2").max(1);const speed=base.mul(multiplier);return finiteSpeed(finitePower(this.activeEC==="ec1"?finitePower(speed,".5"):speed,this.atomSpeedExponent));}
   get speedUpgradeGainRate() { return D("0.10").mul(this.hasInfinityNode("2-1") ? "1.20" : 1); }
   get speedUpgradeEffect() { return this.speedUpgradeGainRate.add(1); }
   get speedUpgradeGain() {
     const gain=finiteSpeed(this.speed).mul(this.speedUpgradeGainRate);
     const batch=this._speedPurchaseContext;
-    const softcapped=batch?.softcapped || this.effectiveSpeed.gte(CONFIG.speedUpgradeSoftCap);
+    const softcapped=batch?.softcapped || this.effectiveSpeed.gte(this.normalSpeedSoftcapStart);
     // Within synchronous purchases, speed only increases when log10(gain) is nonnegative.
     // Tree levels and all speed modifiers stay fixed until the batch ends.
     if(batch && softcapped && gain.gte(1))batch.softcapped=true;
@@ -753,9 +817,9 @@ tickPassiveInfinity(now=Date.now()){const dt=Math.max(0,now-this.passiveInfinity
     this._speedPurchaseContext={softcapped:false};
     try{for(let i=0;i<initial.toNumber();i++)this.speed=finiteSpeed(this.speed.add(this.speedUpgradeGain));}finally{delete this._speedPurchaseContext;}
   }
-  resetRun() { this.debugScoreOverride=false; this.score = D(0); this.ballMultiplier = this.initialBallMultiplier; this.speed = this.initialSpeed; this.upgradeLevels={speed:D(0),gain:D(0),critical:D(0)}; this.challengeSpeedGainLevels=D(0); this.applyEternityInitialUpgrades(); }
-  resetForAscension() { this.prestigePoints = D(0); this.prestigeCount = D(0); this.lastPrestigeScore = D(0); this.lastPrestigeGain=D(0); this.resetRun(); }
-  resetForInfinity() { this.currentAutoPrestigeTarget=autoTargetDecimal(this.autoPrestigeInitialPP); this.currentAutoAscensionTarget=autoTargetDecimal(this.autoAscensionInitialAP); this.infinityCupTriggered=false; this.debugScoreOverride=false; this.infinityStartedAt=Date.now(); this.score=D(0); this.ballMultiplier=this.initialBallMultiplier; this.prestigePoints=D(0); this.prestigeCount=D(0); this.lastPrestigeScore=D(0);this.lastPrestigeGain=D(0);this.ascensionPoints=D(0); this.ascensionCount=D(0); this.speed=D(CONFIG.startingSpeed); this.upgradeLevels={speed:D(0),gain:D(0),critical:D(0)}; this.challengeSpeedGainLevels=D(0); this.applyEternityInitialUpgrades(); }
+  resetRun() { this.nukeSystem.tick(); this.debugScoreOverride=false; this.score = D(0); this.ballMultiplier = this.initialBallMultiplier; this.speed = this.initialSpeed; this.upgradeLevels={speed:D(0),gain:D(0),critical:D(0)}; this.challengeSpeedGainLevels=D(0); this.applyEternityInitialUpgrades(); }
+  resetForAscension() { this.nukeSystem.tick(); this.prestigePoints = D(0); this.prestigeCount = D(0); this.lastPrestigeScore = D(0); this.lastPrestigeGain=D(0); this.resetRun(); }
+  resetForInfinity() { this.nukeSystem.tick(); this.currentAutoPrestigeTarget=autoTargetDecimal(this.autoPrestigeInitialPP); this.currentAutoAscensionTarget=autoTargetDecimal(this.autoAscensionInitialAP); this.infinityCupTriggered=false; this.debugScoreOverride=false; this.infinityStartedAt=Date.now(); this.score=D(0); this.ballMultiplier=this.initialBallMultiplier; this.prestigePoints=D(0); this.prestigeCount=D(0); this.lastPrestigeScore=D(0);this.lastPrestigeGain=D(0);this.ascensionPoints=D(0); this.ascensionCount=D(0); this.speed=D(CONFIG.startingSpeed); this.upgradeLevels={speed:D(0),gain:D(0),critical:D(0)}; this.challengeSpeedGainLevels=D(0); this.applyEternityInitialUpgrades(); }
   serialize() { this.recordCupThreshold(); return { ...saveResetAutomation(this),eternityCount:this.eternityCount,eternity:this.eternity,punk:this.punk,infinityTreeVersion:6, passiveInfinityLastAt:this.passiveInfinityLastAt, infinityCupTriggered:this.infinityCupTriggered===true, debugScoreOverride:this.debugScoreOverride===true, infinityBall:this.infinityBall, autoBuy:{...this.autoBuy},autoInfinity:{...this.autoInfinity}, score:this.score, ballMultiplier:this.ballMultiplier, prestigePoints:this.prestigePoints, prestigeCount:this.prestigeCount, lastPrestigeScore:this.lastPrestigeScore,lastPrestigeGain:this.lastPrestigeGain, ascensionPoints:this.ascensionPoints, ascensionCount:this.ascensionCount, infinityPoints:this.infinityPoints, infinityCount:this.infinityCount, infinityNodes:this.infinityNodes, completedInfinityChallenges:this.completedInfinityChallenges, activeInfinityChallenge:this.activeInfinityChallenge, challengeSpeedGainLevels:this.challengeSpeedGainLevels, commonExponent:this.commonExponent, infinityReached:this.infinityReached, speed:this.speed, bounceCount:this.bounceCount, playTime:this.playTime, lastTickAt:this.lastTickAt,infinityStartedAt:this.infinityStartedAt,bestInfinityTime:this.bestInfinityTime, achievements:this.achievements, showTrail:this.showTrail, upgradeLevels:this.upgradeLevels }; }
 }
 
@@ -820,7 +884,7 @@ class AchievementSystem {
 ,
     {id:"punk-2",name:"頭がパンク",description:"Punkを2回実行する",reward:"なし",condition:()=>this.state.punk.count.gte(2)},
     {id:"punk-milestone-3",name:"報酬のダブルパンチ",description:"Punkマイルストーン3を解放する",reward:"P.mult SC2の開始点を1e999に遅らせる",condition:()=>this.state.hasPunkMilestone(3)},
-    {id:"critical-100000",name:"クリティカルはしょぼいのか",description:"Critical倍率が100,000を超える",reward:"Critical倍率の1%をInfinity倍率に乗算",condition:()=>this.state.criticalMultiplier.gt(100000)},
+    {id:"critical-100000",name:"クリティカルはしょぼいのか",description:"Critical倍率が100,000を超える",reward:"Critical倍率の1%をInfinity倍率に乗算（最低×1）",condition:()=>this.state.criticalMultiplier.gt(100000)},
     {id:"punk-7",name:"パンクをやりすぎ",description:"Punk回数が7に到達する",reward:"なし",condition:()=>this.state.punk.count.gte(7)},
     {id:"clear-pc4",name:"いよいよ来るぞ",description:"PC4をクリアする",reward:"なし",condition:()=>this.state.hasPC('pc4')},
     {id:"clear-pc5",name:"ラストの問題はIP",description:"PC5をクリアする",reward:"なし",condition:()=>this.state.hasPC('pc5')},
@@ -836,7 +900,7 @@ class AchievementSystem {
 
 class UpgradeSystem {
   constructor(state, achievements) { this.state = state; this.achievements=achievements; this.definitions = [
-    { id:"speed", name:"速度", description:"速度増加量10%（IU2-1で12%）\n表示速度200万以上：増加量をlog10に圧縮", cost:level => Decimal.pow(1.55 * (this.state.activeIC==="ic3" ? 1.5 : 1), level).mul(12).mul(this.costMultiplier).mul(this.softcapMultiplier("speed",level)).mul(this.state.pc2CostMultiplier), getLevel:() => this.state.upgradeLevels.speed, buy:() => { if(this.state.activeIC==="ic8") this.state.challengeSpeedGainLevels=this.state.challengeSpeedGainLevels.add(1); else this.state.speed = finiteSpeed(finiteSpeed(this.state.speed).add(this.state.speedUpgradeGain)); this.state.upgradeLevels.speed=this.state.upgradeLevels.speed.add(1); } },
+    { id:"speed", name:"速度", get description(){return `速度増加量10%（IU2-1で12%）\n表示速度${formatMultiplier(state.normalSpeedSoftcapStart)}以上：増加量をlog10に圧縮`; }, cost:level => Decimal.pow(1.55 * (this.state.activeIC==="ic3" ? 1.5 : 1), level).mul(12).mul(this.costMultiplier).mul(this.softcapMultiplier("speed",level)).mul(this.state.pc2CostMultiplier), getLevel:() => this.state.upgradeLevels.speed, buy:() => { if(this.state.activeIC==="ic8") this.state.challengeSpeedGainLevels=this.state.challengeSpeedGainLevels.add(1); else this.state.speed = finiteSpeed(finiteSpeed(this.state.speed).add(this.state.speedUpgradeGain)); this.state.upgradeLevels.speed=this.state.upgradeLevels.speed.add(1); } },
     { id:"gain", name:"倍率獲得量", get description(){return state.activeEC==="ec2"?"倍率獲得量強化は反転中（購入するほど減少）":`バウンドごとの倍率獲得量を ${formatMultiplier(D(20).add(state.hasEC("ec2")?state.challengePower.mul(5):0))}% 強化`;}, cost:level => Decimal.pow(this.achievements.gainCostGrowth, level).mul(20).mul(this.costMultiplier).mul(this.softcapMultiplier("gain",level)).mul(this.state.pc2CostMultiplier), getLevel:() => this.state.upgradeLevels.gain, buy:() => { this.state.upgradeLevels.gain=this.state.upgradeLevels.gain.add(1); } },
     {id:"critical",name:"Critical Multiplier",description:"Critical倍率に+1（Punk強化で加算量増加）。初回Punkで解放",get locked(){return state.punk.count.lt(1);},cost:level=>D("1e100").mul(Decimal.pow(10,level)).mul(this.heavyCostMultiplier(level)).mul(this.costMultiplier).mul(this.state.pc2CostMultiplier),getLevel:()=>this.state.upgradeLevels.critical,buy:()=>{this.state.upgradeLevels.critical=this.state.upgradeLevels.critical.add(1);}}
   ]; for(const upgrade of this.definitions){const baseCost=upgrade.cost;upgrade.cost=level=>this.state.hasEC("ec9")?D(0):baseCost(level);} }
@@ -849,7 +913,7 @@ class UpgradeSystem {
   }
   get costMultiplier() { return D(this.achievements.costDiscount).mul(this.state.hasInfinityNode("3-2") ? "0.90" : 1).mul(this.state.hasCompletedIC("ic7") ? this.state.challengeReduction('.80') : 1).mul(D(1).sub(this.infinityCostDiscountPercent.div(100))); }
   isLevelCapped(upgrade) { return (this.state.activeIC==="ic7"&&D(upgrade.getLevel()).gte(450))||(this.state.activeEC==="ec9"&&["speed","gain"].includes(upgrade.id)&&D(upgrade.getLevel()).gte(6000)); }
-  buy(id) { const upgrade = this.definitions.find(item => item.id === id); if (!upgrade || upgrade.locked) return false; const cost = upgrade.cost(upgrade.getLevel()); if (this.isLevelCapped(upgrade)) return false; if (this.state.score.lt(cost)) return false; this.state.recordCupThreshold(); this.state.score = this.state.score.sub(cost); upgrade.buy(); return true; }
+  buy(id) { const upgrade = this.definitions.find(item => item.id === id); if (!upgrade || upgrade.locked) return false; const cost = upgrade.cost(upgrade.getLevel()); if (this.isLevelCapped(upgrade)) return false; if (this.state.score.lt(cost)) return false; this.state.nukeSystem.tick();this.state.recordCupThreshold(); this.state.score = this.state.score.sub(cost); upgrade.buy(); return true; }
   buyAmount(id, amount, canContinue=()=>true) {
     const previous=this.state._speedPurchaseContext;
     if(id==="speed")this.state._speedPurchaseContext={softcapped:false};
@@ -975,7 +1039,7 @@ class InfinitySystem {
     .mul(s.achievement36IPMultiplier).mul(s.eternityBonus("ip")).mul(s.alephIPMultiplier);
   }
   get rawPendingPoints(){return this.basePoints.mul(this.multiplierTotal);}
-  get pendingPoints(){let gain=this.rawPendingPoints;if(this.state.hasReward("infinity-score-1e25"))gain=finitePower(gain,BALANCE.Achievement48IPPower);if(this.state.hasPunkMilestone(4))gain=finitePower(gain,this.state.milestoneMultiplier("1.15"));if(this.state.hasPC("pc5"))gain=finitePower(gain,"1.05");if(this.state.hasAleph(13))gain=finitePower(gain,this.state.alephMultiplier("1.21"));return this.state.eternityBroken?gain:gain.min(D(BALANCE.InfinityPointCap).sub(this.state.infinityPoints).max(0));}
+  get pendingPoints(){let gain=this.rawPendingPoints;if(this.state.hasReward("infinity-score-1e25"))gain=finitePower(gain,BALANCE.Achievement48IPPower);if(this.state.hasPunkMilestone(4))gain=finitePower(gain,this.state.milestoneMultiplier("1.2"));if(this.state.hasPC("pc5"))gain=finitePower(gain,"1.05");if(this.state.hasAleph(13))gain=finitePower(gain,this.state.alephMultiplier("1.21"));return this.state.eternityBroken?gain:gain.min(D(BALANCE.InfinityPointCap).sub(this.state.infinityPoints).max(0));}
   perform() { this.state.tickPassiveInfinity(); this.state.recordInfinityArrival(); new AchievementSystem(this.state).check(); const gain=this.pendingPoints; if (!this.available || (gain.lte(0)&&this.state.infinityPoints.lt(BALANCE.InfinityPointCap)&&!this.challenges.get(this.state.activeInfinityChallenge))) return false; const completed=this.challenges.completeActive(); this.state.infinityPoints=this.state.capInfinityPoints(this.state.infinityPoints.add(gain)); this.state.infinityCount=this.state.infinityCount.add(this.state.infinityCountGain); this.state.infinityReached=true; new AchievementSystem(this.state).check(); this.state.resetForInfinity(); if (this.state.hasInfinityNode("11-1")) { this.state.score=D(100); this.state.ascensionCount=D(2); this.state.speed=this.state.initialSpeed;this.state.applyEternityInitialUpgrades(); } return completed || true; }
 }
 
@@ -1017,10 +1081,12 @@ class InfinityBallSystem {
   }
   get ball() { return this.state.infinityBall; }
   get gain() { return Decimal.pow(1.20,this.ball.levels.gain).mul(CONFIG.startingMultiplierGain).mul(this.state.alephBallGain); }
+  get speedGainSoftcapped(){return this.ball.speed.gte(BALANCE.InfinityBallSpeedGainSoftcapStart);}
+  get speedUpgradeGain(){const gain=this.ball.speed.mul("0.1");return this.speedGainSoftcapped?finitePower(gain,this.state.infinityBallSpeedSoftcapPower):gain;}
   get costSoftcapStart(){return D(BALANCE.InfinityBallCostSoftcapStart).mul(this.state.hasPunkMilestone(4)?this.state.milestoneMultiplier(BALANCE.InfinityBallMilestone4SoftcapMultiplier):1);}
   cost(id) { const growth=id==="speed" ? BALANCE.InfinityBallSpeedCostGrowth : (this.achievements.isUnlocked("gain-030") ? BALANCE.InfinityBallGainRewardCostGrowth : BALANCE.InfinityBallGainCostGrowth); return D("1e20").mul(Decimal.pow(growth,this.ball.levels[id])).mul(Decimal.pow(10,this.ball.levels[id].sub(this.costSoftcapStart).max(0).pow(1.35).div(20))); }
   create() { this.tick(); if(this.ball.owned || this.state.infinityPoints.lt("1e20")) return false; this.state.infinityPoints=this.state.infinityPoints.sub("1e20"); this.ball.owned=true; this.ball.lastAt=Date.now(); return true; }
-  buy(id,settle=true) { if(settle)this.tick(); if(this.state.activePC==="pc1" || !this.ball.owned || !["speed","gain"].includes(id)) return false; const cost=this.cost(id); if(this.state.infinityPoints.lt(cost)) return false; this.state.infinityPoints=this.state.infinityPoints.sub(cost); this.ball.levels[id]=this.ball.levels[id].add(1); if(id==="speed") this.ball.speed=finiteSpeed(this.ball.speed.mul(1.10)); return true; }
+  buy(id,settle=true) { if(settle)this.tick(); if(this.state.activePC==="pc1" || !this.ball.owned || !["speed","gain"].includes(id)) return false; const cost=this.cost(id); if(this.state.infinityPoints.lt(cost)) return false; this.state.infinityPoints=this.state.infinityPoints.sub(cost); this.ball.levels[id]=this.ball.levels[id].add(1); if(id==="speed") this.ball.speed=finiteSpeed(this.ball.speed.add(this.speedUpgradeGain)); return true; }
   buyAmount(id,amount) {
     if(!["speed","gain"].includes(id) || ![1,5,10,50,10000].includes(amount)) return 0;
     this.tick(); let bought=0;
@@ -1054,7 +1120,7 @@ class InfinityBallSystem {
   render(ui) {
     if(ui.activePage!=="infinity" || ui.infinityPanel!=="ball") return;
     const set=(id,text)=>{const el=document.getElementById(id);if(el)el.textContent=text;};
-    set("ib-score",format(this.ball.score));set("ib-score-exponent",this.state.punkInfinityScoreExponentText);set("ib-multiplier",formatMultiplier(this.ball.multiplier));set("ib-speed",formatMultiplier(this.ball.speed));set("ib-bonus",formatMultiplier(this.state.infinityMultiplier));set("ib-achievement43-bonus",this.state.achievement43BonusText);set("ib-ip",format(this.state.infinityPoints));set("ib-bounces",format(this.ball.bounces));
+    set("ib-score",format(this.ball.score));set("ib-score-exponent",this.state.punkInfinityScoreExponentText);set("ib-multiplier",formatMultiplier(this.ball.multiplier));set("ib-speed",formatMultiplier(this.ball.speed)+(this.speedGainSoftcapped?" (Speed Gain Softcapped)":""));set("ib-bonus",formatMultiplier(this.state.infinityMultiplier)+(this.state.infinitySoftcapped?" (Softcapped1)":""));set("ib-achievement43-bonus",this.state.achievement43BonusText);set("ib-ip",format(this.state.infinityPoints));set("ib-bounces",format(this.ball.bounces));
     const create=document.getElementById("ib-create");if(create)create.disabled=this.ball.owned || this.state.infinityPoints.lt("1e20");
     for(const id of ["speed","gain"]) { const button=document.getElementById("ib-buy-"+id); if(button){button.disabled=this.state.activePC==="pc1" || !this.ball.owned || this.state.infinityPoints.lt(this.cost(id));button.textContent="購入 — "+format(this.cost(id))+" IP";}set("ib-level-"+id,format(this.ball.levels[id])); }
     set("ib-rate",format(this.ball.speed.div(260)));set("ib-mode",this.ball.speed.gt(CONFIG.physicsSimulationThreshold) ? "毎秒バウンド計算（描画速度は固定）" : "壁への衝突ごとに獲得");
@@ -1121,7 +1187,7 @@ try{if(typeof value==='string'&&!value.trim())return false;const target=D(value)
 
 class BackgroundTickSystem {
   constructor(state, automation, onProgress) { this.state=state; this.automation=automation; this.onProgress=onProgress; this.catchUp(); document.addEventListener("visibilitychange",()=>{ if (!document.hidden) this.catchUp(); }); setInterval(()=>this.tick(), CONFIG.backgroundTickMs); }
-  catchUp() { const now=Date.now(); const elapsed=Math.max(0,(now-this.state.lastTickAt)/1000); this.state.lastTickAt=now; if (elapsed<=0) return; new EternitySystem(this.state).tickPassive(now); const result=this.state.processBackgroundTime(elapsed); this.automation.processBackgroundTick(elapsed); if (result.bounces.gt(0)) this.onProgress(result,elapsed); }
+  catchUp() { const now=Date.now(); const elapsed=Math.max(0,(now-this.state.lastTickAt)/1000); this.state.lastTickAt=now; if (elapsed<=0) return; new NukeSystem(this.state).tick(now);new EternitySystem(this.state).tickPassive(now); const result=this.state.processBackgroundTime(elapsed); this.automation.processBackgroundTick(elapsed); if (result.bounces.gt(0)) this.onProgress(result,elapsed); }
   tick() { if (document.hidden) this.catchUp(); else this.state.lastTickAt=Date.now(); }
 }
 
@@ -1294,7 +1360,7 @@ class UIController {
   }
   infinityBallMarkup() {
     const s=this.state,b=s.infinityBall;
-    const upgrades=this.upgrades.definitions.filter(u=>["speed","gain"].includes(u.id)).map(u=>`<article class="upgrade-card"><h2>${u.name} <small>Lv.<span id="ib-level-${u.id}">${format(b.levels[u.id])}</span></small></h2><p>${u.id==="speed" ? "Infinity Ballの速度を10%増加" : "Infinity Ballの倍率獲得量を20%増加"}</p><button id="ib-buy-${u.id}" data-ib-buy="${u.id}" ${!b.owned || s.infinityPoints.lt(infinityBallSystem.cost(u.id)) ? "disabled" : ""}>購入 — ${format(infinityBallSystem.cost(u.id))} IP</button><div class="bulk-actions">${[5,10,50,"max"].map(amount=>`<button data-ib-buy="${u.id}" data-ib-amount="${amount}" ${!b.owned || s.infinityPoints.lt(infinityBallSystem.cost(u.id)) ? "disabled" : ""}>${amount==="max" ? "MAX" : amount}</button>`).join("")}</div></article>`).join("");
+    const upgrades=this.upgrades.definitions.filter(u=>["speed","gain"].includes(u.id)).map(u=>`<article class="upgrade-card"><h2>${u.name} <small>Lv.<span id="ib-level-${u.id}">${format(b.levels[u.id])}</span></small></h2><p>${u.id==="speed" ? `速度増加量は現在速度×10%。速度${BALANCE.InfinityBallSpeedGainSoftcapStart}以上では増加量だけを^${formatMultiplier(s.infinityBallSpeedSoftcapPower)}に圧縮` : "Infinity Ballの倍率獲得量を20%増加"}</p><button id="ib-buy-${u.id}" data-ib-buy="${u.id}" ${!b.owned || s.infinityPoints.lt(infinityBallSystem.cost(u.id)) ? "disabled" : ""}>購入 — ${format(infinityBallSystem.cost(u.id))} IP</button><div class="bulk-actions">${[5,10,50,"max"].map(amount=>`<button data-ib-buy="${u.id}" data-ib-amount="${amount}" ${!b.owned || s.infinityPoints.lt(infinityBallSystem.cost(u.id)) ? "disabled" : ""}>${amount==="max" ? "MAX" : amount}</button>`).join("")}</div></article>`).join("");
     return `<section class="ib-panel"><h2>Infinity Ball</h2><p>所持IP：<b id="ib-ip">${format(s.infinityPoints)}</b> ／ 所持数：${b.owned ? 1 : 0} / 1</p>${b.owned ? '<svg class="ib-arena" viewBox="0 0 800 400" role="img" aria-label="枠内をバウンドするInfinity Ball"><rect x="10" y="10" width="780" height="380" rx="3"/><circle id="ib-dot" cx="14" cy="14" r="4"/></svg>' : '<button id="ib-create" '+(s.infinityPoints.lt("1e20")?'disabled':'')+'>Infinity Ball生成 — 1.00e20 IP</button>'}<p><span id="ib-mode">通常描画</span> ／ 毎秒 <b id="ib-rate">${format(b.speed.div(260))}</b> バウンド</p><dl class="stats-grid"><div><dt>Infinity Score</dt><dd id="ib-score">${format(b.score)}</dd></div><div><dt>Infinity Score獲得指数（PC1）</dt><dd id="ib-score-exponent">${s.punkInfinityScoreExponentText}</dd></div><div><dt>Infinity Ball内の倍率</dt><dd id="ib-multiplier">${formatMultiplier(b.multiplier)}</dd></div><div><dt>速度</dt><dd id="ib-speed">${formatMultiplier(b.speed)}</dd></div><div><dt>通常ボールのInfinity倍率 ×</dt><dd id="ib-bonus">${formatMultiplier(s.infinityMultiplier)}</dd></div><div><dt>実績43：通常ボール倍率獲得量への補正</dt><dd id="ib-achievement43-bonus">${s.achievement43BonusText}</dd></div><div><dt>累計バウンド</dt><dd id="ib-bounces">${format(b.bounces)}</dd></div></dl><div class="ib-upgrades">${upgrades}</div><p>コストSC：Lv1000（Punkマイルストーン4取得後はLv1500）超のコストに10^(超過Lv^1.35 / 20)を乗算します。</p><p>低速・タブ表示中は壁への衝突ごとに獲得。タブ非表示中または速度30,000超は毎秒バウンド数で計算します。Infinity Score^${s.infinityScoreExponent}を通常ボールの独立したInfinity倍率に変換します（IU7-2の乗算を含む）。リセット後も保持されます。</p></section>`;
   }
   punkMarkup(){const ps=punkSystem,p=ps.p;if(!ps.unlocked)return this.infinityPlaceholder('Punk','IU18-1を購入すると解放されます。');
@@ -1302,16 +1368,16 @@ class UIController {
     return `<section class="punk-view"><div class="punk-heading"><div><span class="eyebrow">BEYOND INFINITY</span><h2>Punk</h2></div><span id="punk-eternity">${this.state.eternityAvailable?'Eternity Available':'Eternity：PC5 Clear ＋ 1e308 IP'}</span></div>
     <dl class="stats-grid"><div><dt>Punk Count</dt><dd id="punk-count">${format(p.count)}</dd></div><div><dt>次の必要IP</dt><dd id="punk-requirement">${format(ps.requirement)}</dd></div><div><dt>Common Exponent追加</dt><dd id="punk-bonus">+${formatMultiplier(this.state.punkExponentBonus)}</dd></div><div><dt>Common Exponent</dt><dd id="punk-exponent">${formatMultiplier(this.state.effectiveCommonExponent)}</dd></div></dl>
     <p id="punk-gate">${ps.blockReason||'必要IPを消費し、通常進行だけリセット。Infinity回数・Tree・IC・Infinity Ballを保持します。'}</p><button id="punk-perform" data-punk-action="perform" ${ps.available?'':'disabled'}>PUNK</button>
-    <section class="punk-section"><h2>Punk Sphere</h2><p>${p.count.lt(1)?'初回Punkで解放':'1秒ごとに抽選。オフラインの抽選も処理します。'}</p><dl class="stats-grid"><div><dt>所持Sphere</dt><dd id="punk-spheres">${format(p.spheres)}</dd></div><div><dt>出現率</dt><dd id="punk-chance">${formatMultiplier(ps.sphereChance.mul(100))}%</dd></div><div><dt>獲得量 / 当選</dt><dd>${format(ps.sphereGain)}</dd></div><div><dt>抽選 / 秒</dt><dd>${format(ps.sphereChecksPerSecond)}</dd></div></dl><p>100%超の出現率は保持し、現在の抽選確率は100%までです。超過分の追加報酬はありません。</p></section>
-    <section class="punk-section"><h2>Punk Upgrade</h2><div class="challenge-grid"><article class="challenge-card"><h2>Critical Chance</h2><p>Lv.${format(p.upgrades.criticalChance)} · ${formatMultiplier(this.state.criticalChance.mul(100))}%</p><p>Lv1は1%、以後1レベルにつき+0.1ポイント。最大25%。</p><button data-punk-action="upgrade" data-upgrade-id="criticalChance" ${p.count.gte(1)&&p.upgrades.criticalChance.lt(241)&&p.spheres.gte(ps.upgradeCost("criticalChance"))?"":"disabled"}>購入 — ${format(ps.upgradeCost("criticalChance"))} Sphere</button></article><article class="challenge-card"><h2>Critical Multiplier強化</h2><p>Lv.${format(p.upgrades.criticalPower)} · 通常強化の1レベル効果 ×${formatMultiplier(this.state.criticalPerLevelBoost)}</p><p>購入ごとに通常Critical Upgradeの1レベル加算量を×1.1。Softcap未設定。</p><button data-punk-action="upgrade" data-upgrade-id="criticalPower" ${p.count.gte(1)&&p.spheres.gte(ps.upgradeCost("criticalPower"))?"":"disabled"}>購入 — ${format(ps.upgradeCost("criticalPower"))} Sphere</button></article></div></section>
+    <section class="punk-section"><h2>Punk Sphere</h2><p>${p.count.lt(1)?'初回Punkで解放':'1秒ごとに抽選。オフラインの抽選も処理します。'}</p><dl class="stats-grid"><div><dt>所持Sphere</dt><dd id="punk-spheres">${format(p.spheres)}</dd></div><div><dt>出現率</dt><dd id="punk-chance">${formatMultiplier(ps.sphereChance.mul(100))}%</dd></div><div><dt>獲得量 / 当選（超過分込み）</dt><dd id="punk-sphere-gain">${formatMultiplier(ps.effectiveSphereGain)}</dd></div><div><dt>抽選 / 秒</dt><dd>${format(ps.sphereChecksPerSecond)}</dd></div></dl><p>出現率100%超では必ず当選し、超過分÷100%を獲得量に加算します（150%なら+0.5、200%なら+1 Sphere）。オフライン中も適用します。</p></section>
+    <section class="punk-section"><h2>Punk Upgrade</h2><div class="challenge-grid"><article class="challenge-card"><h2>Critical Chance</h2><p>Lv.${format(p.upgrades.criticalChance)} · ${formatMultiplier(this.state.criticalChance.mul(100))}%</p><p>Lv1は1%、以後1レベルにつき+0.1ポイント×Nuke強化。基本上限25%。</p><button data-punk-action="upgrade" data-upgrade-id="criticalChance" ${p.count.gte(1)&&p.upgrades.criticalChance.lt(241)&&p.spheres.gte(ps.upgradeCost("criticalChance"))?"":"disabled"}>購入 — ${format(ps.upgradeCost("criticalChance"))} Sphere</button></article><article class="challenge-card"><h2>Critical Multiplier強化</h2><p>Lv.${format(p.upgrades.criticalPower)} · 通常強化の1レベル効果 ×${formatMultiplier(this.state.criticalPerLevelBoost)}</p><p>購入ごとに通常Critical Upgradeの1レベル加算量を×1.1。Nuke強化は倍率の増加部分に適用。Softcap未設定。</p><button data-punk-action="upgrade" data-upgrade-id="criticalPower" ${p.count.gte(1)&&p.spheres.gte(ps.upgradeCost("criticalPower"))?"":"disabled"}>購入 — ${format(ps.upgradeCost("criticalPower"))} Sphere</button></article></div></section>
     <section class="punk-section"><h2>運命のジレンマ</h2><p>1回500 Sphere。成功で+${this.state.hasPC('pc4')?2000:1000}、失敗でさらに−100（所持数は0未満になりません）。</p><p>次のLv.<b id="punk-dilemma-level">${p.dilemma.level}</b> · 勝率 <b id="punk-win-chance">${ps.dilemmaWinChance*100}%</b></p><p id="punk-dilemma-buff"></p><p id="punk-dilemma-result">${p.dilemma.lastResult==='win'?'前回：成功':p.dilemma.lastResult==='loss'?'前回：失敗':''}</p><button id="punk-dilemma" data-punk-action="dilemma" ${p.count.gte(1)&&p.spheres.gte(500)?'':'disabled'}>運命に挑む — 500 Sphere</button><p>成功時は次のLvへ進み、Lv5の次はLv1。60秒の効果は次の結果で更新されます。</p></section>
-    <section class="punk-section"><h2>Milestone</h2><div class="challenge-grid">${[[1,"P.mult SC1を撤廃（SC2は維持）／A.mult SC指数+0.1（0.90→1.00）"],[2,"PP獲得式の除数1000／AP獲得式の除数50／Sphere発生率+5ポイント"],[5,"Sphere発生率+10ポイント／Critical倍率×100／P.mult SC2指数+0.04（0.85→0.89）"],[7,"IP獲得量 ^1.15／Infinity Ball強化のコストSC開始点×1.5（Lv1000→1500）"],[10,"Sphere獲得量×10／発生率+12ポイント／共通指数+0.05"]].map(([count,effect],i)=>`<article class="challenge-card ${this.state.hasPunkMilestone(i+1)?"is-complete":""}"><h2>Milestone ${i+1}</h2><p>Punk ${count}回 — ${this.state.hasPunkMilestone(i+1)?"達成済み":"未達成"}</p><p>${effect}</p></article>`).join("")}</div></section></section>`;
+    <section class="punk-section"><h2>Milestone</h2><div class="challenge-grid">${[[1,"P.mult SC1を撤廃（SC2は維持）／A.mult SC指数+0.1（0.90→1.00）"],[2,"PP獲得式の除数1000／AP獲得式の除数50／Sphere発生率+5ポイント"],[5,"Sphere発生率+10ポイント／Critical倍率×100／P.mult SC2指数+0.04（0.85→0.89）"],[7,"IP獲得量 ^1.2／Infinity Ball強化のコストSC開始点×1.5（Lv1000→1500）"],[10,"Sphere獲得量×10／発生率+12ポイント／共通指数+0.05"]].map(([count,effect],i)=>`<article class="challenge-card ${this.state.hasPunkMilestone(i+1)?"is-complete":""}"><h2>Milestone ${i+1}</h2><p>Punk ${count}回 — ${this.state.hasPunkMilestone(i+1)?"達成済み":"未達成"}</p><p>${effect}</p></article>`).join("")}</div></section></section>`;
   }
   refreshPunk(){if(this.activePage!=='infinity'||this.infinityPanel!=='punk'||!punkSystem.unlocked)return;const p=punkSystem.p;
     const signature=[p.count.toString(),p.currentPC,p.clearedPC.join(','),p.unlockedPC.join(','),p.upgrades.criticalChance.toString(),p.upgrades.criticalPower.toString()].join('|');
     if(this.punkSignature!==signature){this.punkSignature=signature;this.openPage('infinity');}
     const set=(id,text)=>{const el=document.getElementById(id);if(el)el.textContent=text;};
-    set('punk-spheres',format(p.spheres));set('punk-chance',formatMultiplier(punkSystem.sphereChance.mul(100))+'%');set('punk-exponent',formatMultiplier(this.state.effectiveCommonExponent));set('punk-dilemma-level',p.dilemma.level);set('punk-win-chance',(punkSystem.dilemmaWinChance*100)+'%');set('punk-dilemma-buff',p.dilemma.until>Date.now()?'出現率補正 '+(p.dilemma.modifier>=0?'+':'')+(p.dilemma.modifier*100)+'% · 残り '+Math.ceil((p.dilemma.until-Date.now())/1000)+'秒':'一時効果なし');set('punk-eternity',this.state.eternityAvailable?'Eternity Available':'Eternity：PC5 Clear ＋ 1e308 IP');
+    set('punk-sphere-gain',formatMultiplier(punkSystem.effectiveSphereGain));set('punk-spheres',format(p.spheres));set('punk-chance',formatMultiplier(punkSystem.sphereChance.mul(100))+'%');set('punk-exponent',formatMultiplier(this.state.effectiveCommonExponent));set('punk-dilemma-level',p.dilemma.level);set('punk-win-chance',(punkSystem.dilemmaWinChance*100)+'%');set('punk-dilemma-buff',p.dilemma.until>Date.now()?'出現率補正 '+(p.dilemma.modifier>=0?'+':'')+(p.dilemma.modifier*100)+'% · 残り '+Math.ceil((p.dilemma.until-Date.now())/1000)+'秒':'一時効果なし');set('punk-eternity',this.state.eternityAvailable?'Eternity Available':'Eternity：PC5 Clear ＋ 1e308 IP');
     document.querySelectorAll('[data-punk-action="upgrade"]').forEach(button=>{const id=button.dataset.upgradeId,cost=punkSystem.upgradeCost(id);button.disabled=p.count.lt(1)||cost===null||p.spheres.lt(cost)||(id==='criticalChance'&&p.upgrades.criticalChance.gte(241));});
     const perform=document.getElementById('punk-perform');if(perform)perform.disabled=!punkSystem.available;
     const dilemma=document.getElementById('punk-dilemma');if(dilemma)dilemma.disabled=p.count.lt(1)||p.spheres.lt(500);
@@ -1336,13 +1402,14 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
     }else lines.push(`Critical倍率 ×${formatMultiplier(s.criticalMultiplier)}`);
     return lines.join('\n');
   }
-  helpMarkup() { return `<section class="help-view"><nav class="help-tabs" aria-label="ヘルプ項目"><button class="is-active" data-help-topic="basic">基本</button><button data-help-topic="upgrades">強化</button><button data-help-topic="prestige">Prestige</button><button data-help-topic="ascension">Ascension</button><button data-help-topic="infinity">Infinity</button><button data-help-topic="eternity">Eternity</button><button data-help-topic="updates">更新履歴</button></nav><div class="help-topic is-active" data-help-content="basic"><h2>基本ルール</h2><p>ボールが壁に当たるたびにボール倍率が上がり、ボール・Prestige・Ascensionの各倍率を掛けたスコアを獲得します。</p></div><div class="help-topic" data-help-content="upgrades" hidden><h2>アップグレード</h2><p>速度はボールの移動速度を上げます。倍率獲得量は、バウンドごとに増えるボール倍率を強化します。初回Prestige後は5・10・50・MAXのまとめ買いが利用できます。通常強化はLv8000超の分から購入ごとの価格倍率がさらに3倍になります（Criticalも対象）。Infinity Ball強化はLv1000（Punkマイルストーン4取得後はLv1500）超から、通常強化の第1段階SCと同じ10^(超過Lv^1.35 / 20)をコストに乗算します。</p></div><div class="help-topic" data-help-content="prestige" hidden><h2>Prestige</h2><p>初回はScore ${format(CONFIG.prestigeRequirement)}以上。次回は獲得予定PPが前回獲得PPの${BALANCE.PrestigeRequiredGainMultiplier}倍以上で実行できます。所持PPが${BALANCE.PrestigeHighPPThreshold}を超えると、前回獲得PPの${BALANCE.PrestigeHighPPRequiredGainMultiplier}倍が必要です。Ascension以上のリセットで初回条件に戻ります。P.multは指数${BALANCE.PrestigeSoftcap1StartExponent}から第1段階SC、その適用後の指数${BALANCE.PrestigeSoftcap2StartExponent}（実績41取得後は${BALANCE.PrestigeSoftcap2Achievement41StartExponent}、実績53取得後は${BALANCE.Achievement53PrestigeSC2Start}）から第2段階SCを適用します。SC1のPowerは${BALANCE.PrestigeSoftcap1Power}（IC2クリア後${BALANCE.PrestigeSoftcap1IC2Power}）、SC2は${BALANCE.PrestigeSoftcap2Power}（Punkマイルストーン3で+0.04）です。Punk 1回のマイルストーン取得後はSC1を省略し、SC2のみ適用します。</p></div><div class="help-topic" data-help-content="ascension" hidden><h2>Ascension</h2><p>Ascension はPrestigeより上位のリセットです。Prestigeの進行をリセットする代わりに、永続的なAscension倍率と初期速度ボーナスを獲得します。IU5-1を含むRaw A.multが1e${BALANCE.AscensionSoftcap1StartExponent}（実績41取得後は1e${BALANCE.AscensionSoftcap1Achievement41StartExponent}）を超えると、log10指数の超過分に^${BALANCE.AscensionSoftcap1Power}のSoftcapを適用します。Punkマイルストーン1で指数が+0.1され、1.00になるため圧縮されなくなります。</p></div><div class="help-topic" data-help-content="infinity" hidden><h2>Infinity</h2><p>初回Infinity実行まではScoreの上限は1e308です。Infinity実行後は1e308を超えられます。IPを使ってInfinity Treeを強化します。以下にチャレンジ・Cup Break・Punkの説明をまとめています。</p><h2>チャレンジ</h2><p>Infinity Tree 4-1でICを解放します。挑戦中に各カードのGoal Scoreへ到達すると自動クリアとなり、報酬が永続します。退出ボタンで通常プレイに戻れますが、挑戦中の進行はリセットされ、クリア報酬は得られません。</p>${this.cupBreakMarkup()}<h2>Punk</h2><p>IU18-1で解放されるInfinityの上位レイヤーです。必要IPを消費して通常進行をリセットします。Infinity回数・Tree・IC・Infinity Ballは保持されます。</p><h3>共通指数とCritical</h3><p>Punk回数ごとに共通指数が+0.05されます。1バウンドの獲得量は「倍率の積 ^ 共通指数」にCritical倍率を掛け、Cup適用中なら最後に^${BALANCE.InfinityCupScorePower}を適用します。画面には指数適用前後と元の何倍になったか、最後のバウンドのCritical結果を表示します。大量バウンドの平均計算は個別のCritical発生と区別して表示します。</p><p>通常Critical強化は初期費用1e100で、倍率に+1。Sphereの倍率強化はこの増加幅を購入ごとに×1.1します。Sphereの確率強化は1レベルごとに+0.1ポイント、基本上限25%です。PC効果は別途適用されます。</p><h3>Sphere・Dilemma・Punk Challenge</h3><p>Sphereは毎秒の確率判定で獲得し、離席中も進行します。SphereでCriticalを強化できます。Dilemmaは500 Sphereを消費する抽選で、結果に応じてSphereと一時的な獲得確率補正が変わります。</p><p>Punk回数に応じてPCが解放され、一部のPunk実行にはPCクリアが必要です。制約・目標・報酬はチャレンジページのPunkタブで確認できます。PCとICには同時参加できません。Punk ChallengeはチャレンジページのPunkタブから選択できます。</p></div><div class="help-topic" data-help-content="eternity" hidden><h2>Eternity</h2><p>PC5クリアとIP1e308で実行できます。EPはlog10(IP)−307、ECクリア数2以上ではそのクリア数を乗算します。実績と自動化設定、Eternity以上の進行を保持し、下位階層をリセットします。</p><p>Σ2で独立したEternity倍率1＋Σ×1.05が有効になります。Σボーナスは開始値Tを超えた分だけT×(B/T)^0.75で圧縮します。回数とECマイルストーンの現在値はEternityページで確認できます。</p><p>Σ500のInfinity Ball Criticalは通常ボールと同じ確率・倍率です。1バウンドは抽選、大量バウンドは平均値で計算します。Σ1000のIP自動獲得は毎秒獲得予定IPの50%で、オフラインにも対応します。Σ27でEC難易度1を解放。開始・退出・クリアはEP/Σを増やさずEternity相当のリセットを行います。アレフツリー6でジェムを購入・装着でき、黒を最後に8色が揃います。Nuke・Contain・PC6〜8の本体仕様とEC難易度2は未定義です。</p></div><div class="help-topic" data-help-content="updates" hidden><h2>更新履歴 — Ver ${CONFIG.releaseVersion}</h2><ul class="update-history">${CONFIG.patchNotes.map(note=>`<li>${note}</li>`).join("")}</ul></div></section>`; }
+  helpMarkup() { return `<section class="help-view"><nav class="help-tabs" aria-label="ヘルプ項目"><button class="is-active" data-help-topic="basic">基本</button><button data-help-topic="upgrades">強化</button><button data-help-topic="prestige">Prestige</button><button data-help-topic="ascension">Ascension</button><button data-help-topic="infinity">Infinity</button><button data-help-topic="eternity">Eternity</button><button data-help-topic="updates">更新履歴</button></nav><div class="help-topic is-active" data-help-content="basic"><h2>基本ルール</h2><p>ボールが壁に当たるたびにボール倍率が上がり、ボール・Prestige・Ascensionの各倍率を掛けたスコアを獲得します。</p></div><div class="help-topic" data-help-content="upgrades" hidden><h2>アップグレード</h2><p>速度はボールの移動速度を上げます。倍率獲得量は、バウンドごとに増えるボール倍率を強化します。初回Prestige後は5・10・50・MAXのまとめ買いが利用できます。通常強化はLv8000超の分から購入ごとの価格倍率がさらに3倍になります（Criticalも対象）。Infinity Ball強化はLv1000（Punkマイルストーン4取得後はLv1500）超から、通常強化の第1段階SCと同じ10^(超過Lv^1.35 / 20)をコストに乗算します。</p></div><div class="help-topic" data-help-content="prestige" hidden><h2>Prestige</h2><p>初回はScore ${format(CONFIG.prestigeRequirement)}以上。次回は獲得予定PPが前回獲得PPの${BALANCE.PrestigeRequiredGainMultiplier}倍以上で実行できます。所持PPが${BALANCE.PrestigeHighPPThreshold}を超えると、前回獲得PPの${BALANCE.PrestigeHighPPRequiredGainMultiplier}倍が必要です。Ascension以上のリセットで初回条件に戻ります。P.multは指数${BALANCE.PrestigeSoftcap1StartExponent}から第1段階SC、その適用後の指数${BALANCE.PrestigeSoftcap2StartExponent}（実績41取得後は${BALANCE.PrestigeSoftcap2Achievement41StartExponent}、実績53取得後は${BALANCE.Achievement53PrestigeSC2Start}）から第2段階SCを適用します。SC1のPowerは${BALANCE.PrestigeSoftcap1Power}（IC2クリア後${BALANCE.PrestigeSoftcap1IC2Power}）、SC2は${BALANCE.PrestigeSoftcap2Power}（Punkマイルストーン3で+0.04）です。Punk 1回のマイルストーン取得後はSC1を省略し、SC2のみ適用します。</p></div><div class="help-topic" data-help-content="ascension" hidden><h2>Ascension</h2><p>Ascension はPrestigeより上位のリセットです。Prestigeの進行をリセットする代わりに、永続的なAscension倍率と初期速度ボーナスを獲得します。IU5-1を含むRaw A.multが1e${BALANCE.AscensionSoftcap1StartExponent}（実績41取得後は1e${BALANCE.AscensionSoftcap1Achievement41StartExponent}）を超えると、log10指数の超過分に^${BALANCE.AscensionSoftcap1Power}のSoftcapを適用します。Punkマイルストーン1で指数が+0.1され、1.00になるため圧縮されなくなります。</p></div><div class="help-topic" data-help-content="infinity" hidden><h2>Infinity</h2><p>初回Infinity実行まではScoreの上限は1e308です。Infinity実行後は1e308を超えられます。IPを使ってInfinity Treeを強化します。以下にチャレンジ・Cup Break・Punkの説明をまとめています。</p><h2>チャレンジ</h2><p>Infinity Tree 4-1でICを解放します。挑戦中に各カードのGoal Scoreへ到達すると自動クリアとなり、報酬が永続します。退出ボタンで通常プレイに戻れますが、挑戦中の進行はリセットされ、クリア報酬は得られません。</p>${this.cupBreakMarkup()}<h2>Punk</h2><p>IU18-1で解放されるInfinityの上位レイヤーです。必要IPを消費して通常進行をリセットします。Infinity回数・Tree・IC・Infinity Ballは保持されます。</p><h3>共通指数とCritical</h3><p>Punk回数ごとに共通指数が+0.05されます。1バウンドの獲得量は「倍率の積 ^ 共通指数」にCritical倍率を掛け、Cup適用中なら最後に^${BALANCE.InfinityCupScorePower}を適用します。画面には指数適用前後と元の何倍になったか、最後のバウンドのCritical結果を表示します。大量バウンドの平均計算は個別のCritical発生と区別して表示します。</p><p>通常Critical強化は初期費用1e100で、倍率に+1。Sphereの倍率強化はこの増加幅を購入ごとに×1.1します。Sphereの確率強化は1レベルごとに+0.1ポイント、基本上限25%です。PC効果は別途適用されます。</p><h3>Sphere・Dilemma・Punk Challenge</h3><p>Sphereは毎秒の確率判定で獲得し、離席中も進行します。SphereでCriticalを強化できます。Dilemmaは500 Sphereを消費する抽選で、結果に応じてSphereと一時的な獲得確率補正が変わります。</p><p>Punk回数に応じてPCが解放され、一部のPunk実行にはPCクリアが必要です。制約・目標・報酬はチャレンジページのPunkタブで確認できます。PCとICには同時参加できません。Punk ChallengeはチャレンジページのPunkタブから選択できます。</p></div><div class="help-topic" data-help-content="eternity" hidden><h2>Eternity</h2><p>新規倍率SC：P.multは既存SC後の指数2500超に2500+(p−2500)^0.80、A.multは既存SC後の指数800超に800+(a−800)^0.85、Infinity倍率は指数350超に350+(i−350)^0.90を適用します。Σ200で撤廃されるのは従来のP.mult SC1・SC2／A.mult SC1のみです。</p><p>PC5クリアとIP1e308で実行できます。EPはlog10(IP)−307、ECクリア数2以上ではそのクリア数を乗算します。実績と自動化設定、Eternity以上の進行を保持し、下位階層をリセットします。</p><p>Σ2で独立したEternity倍率1＋Σ×1.05が有効になります。Σボーナスは開始値Tを超えた分だけT×(B/T)^0.75で圧縮します。回数とECマイルストーンの現在値はEternityページで確認できます。</p><p>Σ500のInfinity Ball Criticalは通常ボールと同じ確率・倍率です。1バウンドは抽選、大量バウンドは平均値で計算します。Σ1000のIP自動獲得は毎秒獲得予定IPの50%で、オフラインにも対応します。Σ27でEC難易度1を解放。開始・退出・クリアはEP/Σを増やさずEternity相当のリセットを行います。アレフツリー6でジェムを購入・装着でき、黒を最後に8色が揃います。NukeはScore1e40000から実行でき、下位進行をリセットしません。Atomは通常速度^0.10を基本とする専用ティックで生成されます。AU1〜4とNukeボーナスの現在値はNukeタブで確認できます。AU3は開始指数ではなく開始倍率そのものを遅延させます。Contain・PC6〜8とEC難易度2は未定義です。</p></div><div class="help-topic" data-help-content="updates" hidden><h2>更新履歴 — Ver ${CONFIG.releaseVersion}</h2><ul class="update-history">${CONFIG.patchNotes.map(note=>`<li>${note}</li>`).join("")}</ul></div></section>`; }
   selectHelpTopic(topic) { document.querySelectorAll("[data-help-topic]").forEach(button=>button.classList.toggle("is-active",button.dataset.helpTopic===topic)); document.querySelectorAll("[data-help-content]").forEach(content=>{ const active=content.dataset.helpContent===topic; content.hidden=!active; content.classList.toggle("is-active",active); }); }
   refreshUpgradeAvailability() { const signature=this.upgrades.definitions.filter(u=>!u.locked).map(u=>`${u.id}:${this.upgrades.isLevelCapped(u)}:${this.state.score.gte(u.cost(u.getLevel()))}:${u.getLevel()}:${this.upgrades.bonusLevel(u.id)}:${u.cost(u.getLevel())}`).join("|"); if (signature !== this.upgradeAvailability) { this.upgradeAvailability=signature; this.renderUpgrades(); } }
   alephMarkup(){
-    const s=this.state,tree=new AlephTreeSystem(s),selected=tree.get(this.alephSelected||1),position=n=>({x:400+n.x*145,y:1060-n.row*120});
-    const links=ALEPH_NODES.flatMap(n=>n.requires.map(id=>{const from=position(tree.get(id)),to=position(n);return `<path class="${s.eternity.alephTree.purchased.includes(id)?'owned':''}" d="M${from.x} ${from.y} L${to.x} ${to.y}"/>`;})).join('');
-    return `<section class="aleph-view"><h2>アレフツリー</h2><p>ノードを選択して効果・前提を確認できます。全前提ノードの購入で次が開きます。${s.activeEC==='ec7'?'EC7中：全ノード効果は無効です。':''}</p><aside class="aleph-detail" aria-live="polite"><h3>ℵ${selected.id} · ${selected.name}</h3><p>${selected.effect}</p><p>前提：${selected.requires.length?selected.requires.map(id=>'ℵ'+id).join(' ＋ '):'なし'} · ${format(D(selected.cost))} EP</p><button data-aleph-buy="${selected.id}" ${tree.canBuy(selected.id)?'':'disabled'}>${s.eternity.alephTree.purchased.includes(selected.id)?'購入済み':'購入'}</button></aside><div class="aleph-scroll" id="aleph-scroll" tabindex="0" aria-label="アレフツリーをスクロール"><div class="aleph-canvas"><svg viewBox="0 0 800 1140" aria-hidden="true">${links}</svg>${ALEPH_NODES.map(n=>{const pos=position(n),owned=s.eternity.alephTree.purchased.includes(n.id);return `<button data-aleph-select="${n.id}" aria-pressed="${selected.id===n.id}" class="aleph-node ${owned?'owned':tree.canBuy(n.id)?'available':'locked'}" style="left:${pos.x}px;top:${pos.y}px"><strong>ℵ${n.id}</strong><span>${n.name}</span><small>${owned?'購入済み':format(D(n.cost))+' EP'}</small></button>`;}).join('')}</div></div></section>`;
+    const s=this.state,tree=new AlephTreeSystem(s),selected=tree.get(this.alephSelected||1)||tree.get(1),position=n=>({x:400+n.x*145,y:1060-n.row*120});
+    const links=ALEPH_NODES.flatMap(n=>n.requires.map(id=>{const from=position(tree.get(id)),to=position(n);return `<path class="${tree.isRevealed(n.id)&&s.eternity.alephTree.purchased.includes(id)?'owned':''}" d="M${from.x} ${from.y} L${to.x} ${to.y}"/>`;})).join('');
+    const detail=tree.isRevealed(selected.id)?`<h3>ℵ${selected.id} · ${selected.name}</h3><p>${selected.effect}</p><p>前提：${selected.requires.length?selected.requires.map(id=>'ℵ'+id).join(' ＋ '):'なし'} · ${format(D(selected.cost))} EP</p><button data-aleph-buy="${selected.id}" ${tree.canBuy(selected.id)?'':'disabled'}>${s.eternity.alephTree.purchased.includes(selected.id)?'購入済み':'購入'}</button>`:`<h3>ℵ${selected.id} · LOCKED</h3><p>解放後に詳細を確認できます。</p>`;
+    return `<section class="aleph-view"><h2>アレフツリー</h2><p>解放済みノードを選択すると詳細を確認できます。購入には全前提ノードと必要EPを満たす必要があります。${s.activeEC==='ec7'?'EC7中：全ノード効果は無効です。':''}</p><aside class="aleph-detail" aria-live="polite">${detail}</aside><div class="aleph-scroll" id="aleph-scroll" tabindex="0" aria-label="アレフツリーをスクロール"><div class="aleph-canvas"><svg viewBox="0 0 800 1500" aria-hidden="true">${links}</svg>${ALEPH_NODES.map(n=>{const pos=position(n),revealed=tree.isRevealed(n.id),owned=s.eternity.alephTree.purchased.includes(n.id);return `<button data-aleph-select="${n.id}" aria-pressed="${revealed&&selected.id===n.id}" ${revealed?'':'disabled aria-label="ℵ'+n.id+' LOCKED"'} class="aleph-node ${!revealed?'sealed':owned?'owned':tree.canBuy(n.id)?'available':'locked'}" style="left:${pos.x}px;top:${pos.y}px"><strong>ℵ${n.id}</strong><span>${revealed?n.name:'LOCKED'}</span><small>${revealed?(owned?'購入済み':format(D(n.cost))+' EP'):'未解放'}</small></button>`;}).join('')}</div></div></section>`;
   }
   gemsMarkup(){
     const s=this.state,g=s.gems,selected=GEM_DEFINITIONS.find(x=>x.id===(this.selectedGem||'red')),row=g.data.inventory[selected.id],levelCost=row.level>0&&row.level<10?GEM_LEVEL_COSTS[row.level-1]:null;
@@ -1355,15 +1422,22 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
       green:[['Nuke効果量',D(1).add(g.normal('green','.1','.03'))],['Atom',g.greenAtomMultiplier]],
       white:[['Atomティック速度',s.atomTickSpeedMultiplier]],black:[['他色通常効果量',D(1).add(g.normal('black','.05','.02'))],['他色Lv7効果量',D(1).add(g.high('black').mul('.02'))]]
     };
-    return `<section class="gem-view"><h2>ジェム</h2><p>${g.unlocked?'各色1スロット、8色同時装着可能。初入手時は自動装着。':'アレフ6で購入・装着を解放。'} 黒は8色目に確定、それ以降は全色ランダムです。</p><button data-gem-buy ${g.unlocked&&s.eternity.points.gte(g.cost)?'':'disabled'}>ランダムジェム購入 — ${format(g.cost)} EP</button><p>購入ごとの価格倍率 ×${formatMultiplier(g.growth)} · 累計${format(g.data.purchases)}個${g.data.priceResetAt!==null?' · アレフ10価格リセット済み':''}</p><div class="gem-layout"><div class="gem-board" aria-label="8色のジェムスロット">${GEM_DEFINITIONS.map((gem,i)=>{const item=g.data.inventory[gem.id],equipped=g.data.equipped.includes(gem.id),angle=(i*45-90)*Math.PI/180;return `<button class="gem-slot ${equipped?'equipped':''}" style="--gem:${gem.color};left:${50+37*Math.cos(angle)}%;top:${50+37*Math.sin(angle)}%" data-gem-select="${gem.id}" aria-pressed="${selected.id===gem.id}"><span>${gem.name}</span><small>${item.level?'Lv.'+item.level:'未所持'}</small></button>`;}).join('')}<div class="special-gem"><span>特殊ジェム<br>未解放</span></div></div><article class="gem-detail"><h3 style="color:${selected.color}">${selected.name}ジェム · Lv.${row.level} / 10</h3><p>通常：${selected.normal}</p><p>Lv7以降：${selected.high}</p><p>所持重複数：${format(row.copies)}</p><button data-gem-toggle="${selected.id}" ${g.unlocked&&row.level?'':'disabled'}>${g.data.equipped.includes(selected.id)?'外す':'装着'}</button><button data-gem-upgrade="${selected.id}" ${g.unlocked&&levelCost!==null&&row.copies.gte(levelCost)?'':'disabled'}>${row.level>=10?'レベル上限':levelCost===null?'未所持':'強化 — 同色 '+levelCost+'個'}</button><h4>現在の装着効果</h4><dl class="stats-grid">${effects[selected.id].map(([label,value])=>stat(label,'×'+formatMultiplier(value))).join('')}${selected.id==='purple'?stat('EP基礎式への加算','+'+formatMultiplier(g.high('purple').mul(2))):''}${selected.id==='white'?stat('ジェム由来ティック指数','+'+formatMultiplier(g.high('white').mul('.01'))):''}</dl><p>${s.activeEC==='ec5'?'EC5：ジェム効果量は1/5です。':''}紫は指数報酬と解放報酬を変更しません。コスト軽減の最低倍率は×0.01です。緑・白のNuke/Atom効果は本体実装待ちです。</p></article></div></section>`;
+    return `<section class="gem-view"><h2>ジェム</h2><p>${g.unlocked?'各色1スロット、8色同時装着可能。初入手時は自動装着。':'アレフ6で購入・装着を解放。'} 黒は8色目に確定、それ以降は全色ランダムです。</p><button data-gem-buy ${g.unlocked&&s.eternity.points.gte(g.cost)?'':'disabled'}>ランダムジェム購入 — ${format(g.cost)} EP</button><p>購入ごとの価格倍率 ×${formatMultiplier(g.growth)} · 累計${format(g.data.purchases)}個${g.data.priceResetAt!==null?' · アレフ10価格リセット済み':''}</p><div class="gem-layout"><div class="gem-board" aria-label="8色のジェムスロット">${GEM_DEFINITIONS.map((gem,i)=>{const item=g.data.inventory[gem.id],equipped=g.data.equipped.includes(gem.id),angle=(i*45-90)*Math.PI/180;return `<button class="gem-slot ${equipped?'equipped':''}" style="--gem:${gem.color};left:${50+37*Math.cos(angle)}%;top:${50+37*Math.sin(angle)}%" data-gem-select="${gem.id}" aria-pressed="${selected.id===gem.id}"><span>${gem.name}</span><small>${item.level?'Lv.'+item.level:'未所持'}</small></button>`;}).join('')}<div class="special-gem"><span>特殊ジェム<br>未解放</span></div></div><article class="gem-detail"><h3 style="color:${selected.color}">${selected.name}ジェム · Lv.${row.level} / 10</h3><p>通常：${selected.normal}</p><p>Lv7以降：${selected.high}</p><p>所持重複数：${format(row.copies)}</p><button data-gem-toggle="${selected.id}" ${g.unlocked&&row.level?'':'disabled'}>${g.data.equipped.includes(selected.id)?'外す':'装着'}</button><button data-gem-upgrade="${selected.id}" ${g.unlocked&&levelCost!==null&&row.copies.gte(levelCost)?'':'disabled'}>${row.level>=10?'レベル上限':levelCost===null?'未所持':'強化 — 同色 '+levelCost+'個'}</button><h4>現在の装着効果</h4><dl class="stats-grid">${effects[selected.id].map(([label,value])=>stat(label,'×'+formatMultiplier(value))).join('')}${selected.id==='purple'?stat('EP基礎式への加算','+'+formatMultiplier(g.high('purple').mul(2))):''}${selected.id==='white'?stat('ジェム由来ティック指数','+'+formatMultiplier(g.high('white').mul('.01'))):''}</dl><p>${s.activeEC==='ec5'?'EC5：ジェム効果量は1/5です。':''}紫は指数報酬と解放報酬を変更しません。コスト軽減の最低倍率は×0.01です。緑・白の効果はNuke / Atomに適用されます。</p></article></div></section>`;
   }
   ecMarkup(){const s=this.state,ec=new EternityChallengeSystem(s);return `<h2>Eternity Challenge</h2><p>${s.hasEternityMilestone(27)?'難易度1を選択できます。開始・退出・クリアはEternity相当の下位リセット（EP・Σ獲得なし）。':'Σ27で解放。'} 難易度2は未定義です。</p>${ec.active?`<div class="ec-active"><strong>${ec.active.id.toUpperCase()} 挑戦中 — ${ec.active.name}</strong><p>Score ${format(s.score)} / ${format(D(ec.active.goal))}</p><button data-ec-exit>退出（下位進行リセット）</button></div>`:''}<p>紫ジェムによる数値報酬の強化：×${formatMultiplier(s.challengePower)}（指数報酬は対象外）</p><div class="challenge-grid">${ETERNITY_CHALLENGES.map(c=>`<article class="challenge-card ${s.hasEC(c.id)?'is-complete':''} ${s.activeEC===c.id?'is-active':''}"><span>${c.id.toUpperCase()} · ${s.activeEC===c.id?'挑戦中':s.hasEC(c.id)?'クリア済み':'未クリア'}</span><h2>${c.name}</h2><p>Goal: ${format(D(c.goal))} Score</p><p>制約：${c.restriction}</p><p>報酬：${c.reward}</p>${c.pending?`<p>${c.pending}のため開始は保留中です。</p>`:''}<button data-ec-start="${c.id}" ${ec.canStart(c.id)?'':'disabled'}>難易度1に挑戦</button></article>`).join('')}</div>`;}
   refreshEternityPage(){
     const scroller=document.getElementById('aleph-scroll'),left=scroller?.scrollLeft,top=scroller?.scrollTop,pageTop=this.el['page-content'].scrollTop;
-    const focus=document.activeElement,focusKey=focus?.dataset?Object.entries(focus.dataset).find(([key])=>/^(aleph|gem|ec|eternity)/.test(key)):null;
+    const focus=document.activeElement,focusKey=focus?.dataset?Object.entries(focus.dataset).find(([key])=>/^(aleph|gem|ec|eternity|nuke|au)/.test(key)):null;
     this.openPage('eternity');
     const next=document.getElementById('aleph-scroll');if(next&&top!==undefined){next.scrollTop=top;next.scrollLeft=left;}this.el['page-content'].scrollTop=pageTop;
     if(focusKey){const [key,value]=focusKey,attribute=key.replace(/[A-Z]/g,m=>'-'+m.toLowerCase());document.querySelector(`[data-${attribute}="${value}"]`)?.focus({preventScroll:true});}
+  }
+
+  nukeMarkup(){
+    const s=this.state,n=s.nukeSystem;n.refreshMilestones();const exponent=n.nextExponent,requirement=exponent===null?'現在の暫定上限（175回）':exponent.lte('8e15')?formatScientific(Decimal.pow(10,exponent)):`10 ^ (${format(exponent)})`;
+    const stat=(label,value)=>`<div><dt>${label}</dt><dd>${value}</dd></div>`;
+    const effectText=(id,level)=>{const effect=n.effect(id,level);if(id==='au1')return `速度SC開始 ×${formatMultiplier(effect)}（${format(D(CONFIG.speedUpgradeSoftCap).mul(effect))}）`;if(id==='au2'){const p=D(BALANCE.InfinityBallSpeedGainSoftcapPower).add(D(1).sub(BALANCE.InfinityBallSpeedGainSoftcapPower).mul(effect));return `軽減率 ${formatMultiplier(effect.mul(100))}% ／ SC指数 ^${formatMultiplier(p)}`;}if(id==='au3')return `P.mult SC3・A.mult SC2・Infinity倍率SC1の開始倍率 ×${formatMultiplier(effect)}`;return `通常ボール速度 ^${formatMultiplier(effect)}`;};
+    return `<section class="nuke-view"><h2>Nuke / Atom</h2><dl class="stats-grid">${stat('Nuke回数',format(n.count)+' / '+NUKE_CONFIG.maxCount)}${stat('うち無料回数',format(n.data.freeCount))}${stat('次回必要Score',requirement)}${stat('Atom所持量',formatMultiplier(n.atom.amount))}${stat('Atom / 秒',formatMultiplier(n.perSecond))}${stat('基礎Atom / tick',formatMultiplier(n.perTick))}${stat('Atom獲得倍率','×'+formatMultiplier(n.gainMultiplier))}${stat('Atom tick / 秒',formatMultiplier(n.ticksPerSecond))}${stat('Atomティック指数','^'+formatMultiplier(s.atomTickPower))}</dl><button data-nuke-perform ${n.available?'':'disabled'}>NUKE</button><p>${n.blockReason||'実行可能。Scoreを消費せず、下位進行もリセットしません。'}</p><p>AtomはNuke回数1以上で時間経過により生成されます。通常のEternityではNuke・Atom・AUを保持します。</p><h3>Nuke回数ボーナス</h3><dl class="stats-grid">${[['sigma','Σボーナス6種（既存SC後）'],['sphere','Sphere Upgradeの強化部分'],['atom','Atom Upgradeの強化部分'],['ep','EP獲得量']].map(([id,label])=>stat(label,'×'+formatMultiplier(n.bonus(id)))).join('')}</dl><h3>Atom Upgrade</h3><div class="challenge-grid">${ATOM_UPGRADES.map(u=>{const level=n.level(u.id),cost=n.cost(u.id);return `<article class="challenge-card"><h3>${u.id.toUpperCase()} · ${u.name}</h3><p>Lv.${format(level)} / ${u.max}</p><p>現在：${effectText(u.id,level)}</p><p>${cost===null?'最大レベル':'次：'+effectText(u.id,level.add(1))}</p><button data-au-buy="${u.id}" ${n.count.gte(1)&&cost!==null&&n.atom.amount.gte(cost)?'':'disabled'}>${cost===null?'MAX LEVEL':'購入 — '+formatMultiplier(cost)+' Atom'}</button><button data-au-max="${u.id}" ${n.count.gte(1)&&cost!==null&&n.atom.amount.gte(cost)?'':'disabled'}>MAX購入</button></article>`;}).join('')}</div><h3>Nuke回数マイルストーン</h3>${NUKE_MILESTONES.length?`<div class="challenge-grid">${NUKE_MILESTONES.map(m=>`<article class="challenge-card ${n.data.milestones.includes(m.id)?'is-complete':''}"><h3>${m.count}回 · ${n.data.milestones.includes(m.id)?'達成済み':'未達成'}</h3><p>${m.description}</p></article>`).join('')}</div>`:'<p>達成条件・報酬は今後追加予定です。</p>'}</section>`;
   }
 
   eternityMarkup(){
@@ -1378,13 +1452,17 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
     }else if(tab==='challenges')content=this.ecMarkup();
     else if(tab==='aleph')content=this.alephMarkup();
     else if(tab==='gems')content=this.gemsMarkup();
-    else content=`<h2>${tabs.find(([id])=>id===tab)?.[1]||'Eternity'}</h2><p>本体仕様は未確定です。</p>${tab==='nuke'?'<p>EC6・緑/白ジェム・アレフ10〜12の接続値を保存しています。無料Nuke回数：'+format(s.eternity.nuke.freeCount)+'</p>':''}${tab==='contain'?'<p>アレフ16：'+(s.containUnlocked?'解放済み':'未解放')+'。本体とEC10の開始は仕様待ちです。</p>':''}`;
+    else if(tab==='nuke')content=this.nukeMarkup();
+    else content=`<h2>${tabs.find(([id])=>id===tab)?.[1]||'Eternity'}</h2><p>本体仕様は未確定です。</p>${tab==='contain'?'<p>アレフ16：'+(s.containUnlocked?'解放済み':'未解放')+'。本体とEC10の開始は仕様待ちです。</p>':''}`;
 
-    return `<section class="eternity-view"><h2>Eternity</h2>${summary}<button data-eternity-perform ${sys.available?'':'disabled'}>ETERNITY — +${format(sys.pendingPoints)} EP</button><p>下位進行をリセットし、EPとΣを獲得します。</p><nav class="help-tabs">${tabs.map(([id,label])=>`<button data-eternity-tab="${id}" class="${tab===id?'is-active':''}">${label}</button>`).join('')}</nav>${content}</section>`;
+    return `<section class="eternity-view"><h2>Eternity</h2>${summary}<button data-eternity-perform ${sys.available?'':'disabled'}>ETERNITY — +${format(sys.pendingPoints)} EP</button><p>${sys.blockReason||"下位進行をリセットし、EPとΣを獲得します。"}${s.debugOverridesActive?" 実行時にDebug overrideを解除します。":""}</p><nav class="help-tabs">${tabs.map(([id,label])=>`<button data-eternity-tab="${id}" class="${tab===id?'is-active':''}">${label}</button>`).join('')}</nav>${content}</section>`;
   }
   bindEternityControls(){
     const update=()=>{this.refreshEternityPage();this.upgradeAvailability=null;localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));};
-    document.querySelectorAll('[data-aleph-select]').forEach(b=>b.addEventListener('click',()=>{this.alephSelected=Number(b.dataset.alephSelect);update();}));
+    document.querySelectorAll('[data-nuke-perform]').forEach(b=>b.addEventListener('click',()=>{if(this.state.nukeSystem.perform())update();}));
+    document.querySelectorAll('[data-au-buy]').forEach(b=>b.addEventListener('click',()=>{if(this.state.nukeSystem.buy(b.dataset.auBuy))update();}));
+    document.querySelectorAll('[data-au-max]').forEach(b=>b.addEventListener('click',()=>{if(this.state.nukeSystem.buyMax(b.dataset.auMax))update();}));
+    document.querySelectorAll('[data-aleph-select]').forEach(b=>b.addEventListener('click',()=>{const id=Number(b.dataset.alephSelect);if(!new AlephTreeSystem(this.state).isRevealed(id))return;this.alephSelected=id;update();}));
     document.querySelectorAll('[data-aleph-buy]').forEach(b=>b.addEventListener('click',()=>{if(new AlephTreeSystem(this.state).buy(Number(b.dataset.alephBuy)))update();}));
     document.querySelectorAll('[data-gem-select]').forEach(b=>b.addEventListener('click',()=>{this.selectedGem=b.dataset.gemSelect;update();}));
     document.querySelectorAll('[data-gem-buy]').forEach(b=>b.addEventListener('click',()=>{const id=this.state.gems.buy();if(id){this.selectedGem=id;this.flash(GEM_DEFINITIONS.find(g=>g.id===id).name+'ジェムを獲得');update();}}));
@@ -1393,7 +1471,7 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
     const resetView=()=>{physics.simulatedDistance=D(0);infinityBallSystem.lastVisualAt=null;this.lastGain=D(0);update();};
     document.querySelectorAll('[data-ec-start]').forEach(b=>b.addEventListener('click',()=>{if(new EternityChallengeSystem(this.state).start(b.dataset.ecStart))resetView();}));
     document.querySelectorAll('[data-ec-exit]').forEach(b=>b.addEventListener('click',()=>{if(new EternityChallengeSystem(this.state).finish(false))resetView();}));
-    document.querySelectorAll('[data-eternity-tab]').forEach(b=>b.addEventListener('click',()=>{this.eternityTab=b.dataset.eternityTab;this.openPage('eternity');if(this.eternityTab==='aleph'){const scroll=document.getElementById('aleph-scroll');if(scroll)scroll.scrollTop=scroll.scrollHeight;}}));
+    document.querySelectorAll('[data-eternity-tab]').forEach(b=>b.addEventListener('click',()=>{this.eternityTab=b.dataset.eternityTab;this.openPage('eternity');if(this.eternityTab==='aleph'){const scroll=document.getElementById('aleph-scroll');if(scroll)scroll.scrollTop=Math.max(0,1060-scroll.clientHeight/2);}}));
     document.querySelectorAll('[data-eternity-auto]').forEach(b=>b.addEventListener('change',()=>{const id=b.dataset.eternityAuto;if(!this.state.hasEternityMilestone(id==='sphere'?128:20))return;this.state.eternity.automation[id]=b.checked;localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));}));
     document.querySelectorAll('[data-eternity-perform]').forEach(b=>b.addEventListener('click',()=>{if(!eternitySystem.available)return;debugOverrides.clearAll();if(eternitySystem.perform()){physics.simulatedDistance=D(0);infinityBallSystem.lastVisualAt=null;this.lastGain=D(0);this.openPage('eternity');this.render();localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));}}));
   }
@@ -1404,7 +1482,7 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
 const ic8Status=document.getElementById("ic8-reward-status");if(ic8Status)ic8Status.textContent=s.ic8Hardcapped?"Hardcapped: ×"+formatMultiplier(s.challengeMultiplier(5)):"現在 ×"+formatMultiplier(s.ic8IPMultiplier);
 const infCount=document.getElementById("infinity-count-live");if(infCount)infCount.textContent=format(s.infinityCount);
 const infinityGainLabel=document.getElementById("infinity-gain-live");if(infinityGainLabel){infinityGainLabel.textContent=this.infinity.available?`獲得予定 +${format(this.infinity.pendingPoints)} IP`:`Score ${formatScientific(this.infinity.requirement)} で${s.activeInfinityChallenge?"Challengeクリア":"解放"}`;const button=document.getElementById("infinity-button");if(button)button.disabled=!this.infinity.available;}
-const passiveLabel=document.getElementById("passive-inf-live");if(passiveLabel)passiveLabel.textContent="+"+formatMultiplier(s.passiveInfinityRate)+" Inf/s"; this.achievements.check(); const unlocked=achievementNotifications.get(this.state)||[]; achievementNotifications.delete(this.state); if (unlocked.length) { this.flash(`実績解除：${unlocked.map(item=>item.name).join(" / ")}`); this.showAchievementPopup(unlocked); } this.el["score-value"].textContent=format(s.score); const infinityLabel=document.getElementById("infinity-multiplier");if(infinityLabel)infinityLabel.textContent=`×${formatMultiplier(s.infinityMultiplier)}`; this.el["ball-multiplier"].textContent=`×${formatMultiplier(s.ballMultiplier)}`; this.el["prestige-multiplier"].textContent=`×${formatMultiplier(s.prestigeMultiplier)}${s.prestigeSoftcapStage?` (Softcapped${s.prestigeSoftcapStage})`:""}`; this.el["ascension-multiplier"].textContent=`×${formatMultiplier(s.ascensionMultiplier)}${s.ascensionSoftcapped?" (Softcapped1)":""}`; this.el["speed-readout"].textContent=`速度 ${formatMultiplier(s.effectiveSpeed)}`; this.el["simulation-bounces"].textContent=s.effectiveSpeed.gt(CONFIG.physicsSimulationThreshold) ? `推定 ${formatMultiplier(s.effectiveSpeed.div(CONFIG.averageDistance))} バウンド / sec` : "統計タブにバウンスを表示"; this.el["score-gain"].textContent=this.bounceCalculationText(); this.el["score-rate"].textContent=`+${format(D(this.lastGain).mul(3))} / sec`; this.el["prestige-button"].disabled=!this.prestige.available; this.el["prestige-summary"].textContent=`獲得予定 +${formatMultiplier(this.prestige.pendingPoints)} PP ／ ${s.lastPrestigeGain.gt(0)?`必要 ${formatMultiplier(this.prestige.requiredPendingPoints)} PP`:`初回条件 Score ≥ ${format(this.prestige.requirement)}`}`; this.el["ascension-button"].disabled=!this.ascension.available; this.el["ascension-summary"].textContent=this.ascension.available ? `獲得予定 +${formatMultiplier(this.ascension.pendingPoints)} AP` : `あと ${formatScientific(this.ascension.requirement.sub(s.score).max(0))} で解放`; this.refreshUpgradeAvailability(); }
+const passiveLabel=document.getElementById("passive-inf-live");if(passiveLabel)passiveLabel.textContent="+"+formatMultiplier(s.passiveInfinityRate)+" Inf/s"; this.achievements.check(); const unlocked=achievementNotifications.get(this.state)||[]; achievementNotifications.delete(this.state); if (unlocked.length) { this.flash(`実績解除：${unlocked.map(item=>item.name).join(" / ")}`); this.showAchievementPopup(unlocked); } this.el["score-value"].textContent=format(s.score); const infinityLabel=document.getElementById("infinity-multiplier");if(infinityLabel)infinityLabel.textContent=`×${formatMultiplier(s.infinityMultiplier)}${s.infinitySoftcapped?" (Softcapped1)":""}`; this.el["ball-multiplier"].textContent=`×${formatMultiplier(s.ballMultiplier)}`; this.el["prestige-multiplier"].textContent=`×${formatMultiplier(s.prestigeMultiplier)}${s.prestigeSoftcapStage?` (Softcapped${s.prestigeSoftcapStage})`:""}`; this.el["ascension-multiplier"].textContent=`×${formatMultiplier(s.ascensionMultiplier)}${s.ascensionSoftcapStage?` (Softcapped${s.ascensionSoftcapStage})`:""}`; this.el["speed-readout"].textContent=`速度 ${formatMultiplier(s.effectiveSpeed)}`; this.el["simulation-bounces"].textContent=s.effectiveSpeed.gt(CONFIG.physicsSimulationThreshold) ? `推定 ${formatMultiplier(s.effectiveSpeed.div(CONFIG.averageDistance))} バウンド / sec` : "統計タブにバウンスを表示"; this.el["score-gain"].textContent=this.bounceCalculationText(); this.el["score-rate"].textContent=`+${format(D(this.lastGain).mul(3))} / sec`; this.el["prestige-button"].disabled=!this.prestige.available; this.el["prestige-summary"].textContent=`獲得予定 +${formatMultiplier(this.prestige.pendingPoints)} PP ／ ${s.lastPrestigeGain.gt(0)?`必要 ${formatMultiplier(this.prestige.requiredPendingPoints)} PP`:`初回条件 Score ≥ ${format(this.prestige.requirement)}`}`; this.el["ascension-button"].disabled=!this.ascension.available; this.el["ascension-summary"].textContent=this.ascension.available ? `獲得予定 +${formatMultiplier(this.ascension.pendingPoints)} AP` : `あと ${formatScientific(this.ascension.requirement.sub(s.score).max(0))} で解放`; this.refreshUpgradeAvailability(); }
   flash(message) { this.el["news-text"].textContent=message; }
   showAchievementPopup(unlocked) {
     this.achievementPopupQueue ||= [];
@@ -1436,8 +1514,9 @@ function formatDuration(seconds) { const hours=Math.floor(seconds/3600), minutes
 function formatPreciseDuration(seconds) { const hours=Math.floor(seconds/3600), minutes=Math.floor((seconds%3600)/60), remaining=Math.floor(seconds%60); return hours>0 ? `${hours}時間${minutes}分${remaining}秒` : minutes>0 ? `${minutes}分${remaining}秒` : `${remaining}秒`; }
 
 // Session-only locks: intercept writes instead of repairing state after every tick.
+const debugOverrideControllers=new WeakMap();
 class DebugOverrides {
-  constructor(state){this.state=state;this.values=new Map();this.supported=new Set([...Object.keys(DECIMAL_FIELDS),'upgradeLevels.speed','upgradeLevels.gain','upgradeLevels.critical','prestigeMultiplier','ascensionMultiplier','infinityMultiplier','effectiveSpeed','rawMultiplierGain','finalMultiplierGain','totalMultiplier']);
+  constructor(state){this.state=state;debugOverrideControllers.set(state,this);this.values=new Map();this.supported=new Set([...Object.keys(DECIMAL_FIELDS),'upgradeLevels.speed','upgradeLevels.gain','upgradeLevels.critical','prestigeMultiplier','ascensionMultiplier','infinityMultiplier','effectiveSpeed','rawMultiplierGain','finalMultiplierGain','totalMultiplier']);
     Object.defineProperty(state,'debugOverridesActive',{get:()=>this.values.size>0});
     let levels=state.upgradeLevels;
     const wrap=value=>{for(const key of ['speed','gain','critical'])this.bind(value,key,'upgradeLevels.'+key);return value;};
@@ -1470,7 +1549,7 @@ const state=loadState(), achievements=new AchievementSystem(state), upgrades=new
 const debugOverrides=new DebugOverrides(state);
 const eternitySystem=new EternitySystem(state);
 const punkSystem=new PunkSystem(state);
-punkSystem.tick();
+state.nukeSystem.tick();punkSystem.tick();
 const infinityBallSystem=new InfinityBallSystem(state,upgrades,achievements);
 infinityBallSystem.tick();
 const physics=new PhysicsEngine(document.getElementById("bounce-canvas"),state,gain=>{ui.lastGain=state.lastBounceScoreGain ?? gain;});
@@ -1483,7 +1562,7 @@ offlineModal.addEventListener("click",event=>{ if (event.target===offlineModal) 
 document.addEventListener("keydown",event=>{ if (event.key==="Escape"&&!offlineModal.hidden) closeOfflineModal(); });
 state.tickPassiveInfinity();
 setInterval(()=>{if(!document.hidden && !ui.isResetting)automation.tick();},150);
-setInterval(()=>{new EternityChallengeSystem(state).checkCompletion();eternitySystem.tickPassive();eternitySystem.tickAutomation();punkSystem.tick();punkSystem.checkCompletion();state.tickPassiveInfinity(); new InfinityChallengeSystem(state).checkCompletion(); infinityBallSystem.tick(); infinityBallSystem.render(ui);  ui.render(); if (!ui.isResetting) localStorage.setItem(CONFIG.saveKey,JSON.stringify(state.serialize()));},150);
+setInterval(()=>{state.nukeSystem.tick();new EternityChallengeSystem(state).checkCompletion();eternitySystem.tickPassive();eternitySystem.tickAutomation();punkSystem.tick();punkSystem.checkCompletion();state.tickPassiveInfinity(); new InfinityChallengeSystem(state).checkCompletion(); infinityBallSystem.tick(); infinityBallSystem.render(ui);  ui.render(); if (!ui.isResetting) localStorage.setItem(CONFIG.saveKey,JSON.stringify(state.serialize()));},150);
 document.addEventListener("visibilitychange",()=>{infinityBallSystem.setPageVisible(!document.hidden);infinityBallSystem.render(ui);});
 ui.render(); requestAnimationFrame(t=>physics.frame(t));
 // ================================
@@ -1503,6 +1582,7 @@ function debugCount(value) {
     return result;
 }
 window.gameDebug = {
+    nuke(){const n=state.nukeSystem;return {count:n.count.toString(),nextScoreExponent:n.nextExponent?.toString()??null,available:n.available,reason:n.blockReason,atom:n.atom.amount.toString(),perTick:n.perTick.toString(),ticksPerSecond:n.ticksPerSecond.toString(),perSecond:n.perSecond.toString(),levels:Object.fromEntries(ATOM_UPGRADES.map(u=>[u.id,n.level(u.id).toString()])),bonuses:Object.fromEntries(Object.keys(NUKE_CONFIG.bonuses).map(id=>[id,n.bonus(id).toString()]))};},
     eternity(){return {points:state.eternity.points.toString(),sigma:state.eternityCount.toString(),sigmaGain:state.eternityCountGain.toString(),epMultiplier:state.epMultiplier.toString(),activeChallenge:state.activeEC,challengeGoal:new EternityChallengeSystem(state).active?.goal||null,clears:state.ecClearCount,aleph:[...state.eternity.alephTree.purchased],alephBallGain:state.alephBallGain.toString(),alephIPMultiplier:state.alephIPMultiplier.toString(),gemCost:state.gems.cost.toString(),gemGrowth:state.gems.growth.toString(),equipped:[...state.eternity.gem.equipped],challengePower:state.challengePower.toString(),milestonePower:state.milestonePower.toString(),nukeRewardMultiplier:state.nukeRewardMultiplier.toString(),atomGainMultiplier:state.atomGainMultiplier.toString(),atomTickPower:state.atomTickPower.toString(),atomTickSpeedMultiplier:state.atomTickSpeedMultiplier.toString(),cpGainMultiplier:state.cpGainMultiplier.toString()};},
     balance(){return {settings:{...BALANCE},score:state.score.toString(),baseIP:infinity.basePoints.toString(),ipFormulaDivisor:infinity.formulaDivisor,icIPMultiplier:infinity.icIPMultiplier.toString(),ipMultiplierTotal:infinity.multiplierTotal.toString(),rawFinalIP:infinity.rawPendingPoints.toString(),finalIP:infinity.pendingPoints.toString(),rawPMult:state.rawPrestigeMultiplier.toString(),softcappedPMult:state.softcappedPrestigeMultiplier.toString(),effectivePMult:state.prestigeMultiplier.toString(),cupActive:state.infinityHardCapActive,cupBroken:state.infinityCupBroken,ipLogBase:infinity.logarithmBase,ipFormula:state.infinityCupBroken?'exponential':'linear',lastPrestigeGain:state.lastPrestigeGain.toString(),pendingPP:prestige.pendingPoints.toString(),requiredPP:prestige.requiredPendingPoints.toString()};},
     override(field,value){const result=debugOverrides.set(field,value);ui.render();return result;},
