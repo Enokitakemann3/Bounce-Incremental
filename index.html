@@ -350,9 +350,9 @@ function loadPunk(saved={}){
 class PunkSystem{
  constructor(state,rng=Math.random){this.state=state;this.rng=rng;this.refreshUnlocks();}
  get p(){return this.state.punk;}
- get unlocked(){return this.p.unlocked||this.state.hasInfinityNode('18-1');}
+ get unlocked(){return this.p.unlocked||this.p.clearedPC.length>0||this.state.hasInfinityNode('18-1');}
  get criticalReady(){return PUNK_CONFIG.normalCriticalBase!==null&&PUNK_CONFIG.normalCriticalPerLevel!==null;}
- refreshUnlocks(){const p=this.p;if(this.state.hasInfinityNode('18-1'))p.unlocked=true;for(const c of PUNK_CHALLENGES)if(c.at!==null&&p.count.gte(c.at)&&!p.unlockedPC.includes(c.id))p.unlockedPC.push(c.id);if(p.clearedPC.includes('pc4')&&!p.unlockedPC.includes('pc5'))p.unlockedPC.push('pc5');if(this.state.expandedPCUnlocked)for(const id of ['pc6','pc7','pc8'])if(!p.unlockedPC.includes(id))p.unlockedPC.push(id);}
+ refreshUnlocks(){const p=this.p;if(this.state.hasInfinityNode('18-1')||p.clearedPC.length)p.unlocked=true;for(const id of p.clearedPC)if(!p.unlockedPC.includes(id))p.unlockedPC.push(id);for(const c of PUNK_CHALLENGES)if(c.at!==null&&p.count.gte(c.at)&&!p.unlockedPC.includes(c.id))p.unlockedPC.push(c.id);if(p.clearedPC.includes('pc4')&&!p.unlockedPC.includes('pc5'))p.unlockedPC.push('pc5');if(this.state.expandedPCUnlocked)for(const id of ['pc6','pc7','pc8'])if(!p.unlockedPC.includes(id))p.unlockedPC.push(id);}
  requirementAt(n){n=D(n);if(n.lte(3))return Decimal.pow(10,n.sub(1).mul(10).add(50));if(n.lte(5))return Decimal.pow(10,n.sub(3).mul(15).add(70));if(n.lte(8))return Decimal.pow(10,n.sub(5).mul(25).add(100));if(n.lte(12))return Decimal.pow(10,n.sub(8).mul(30).add(175));return Decimal.pow(10,D(345).mul(Decimal.pow(1.15,n.sub(13))));}
  get requirement(){return this.requirementAt(this.p.count.add(1));}
  get gate(){return PUNK_CHALLENGES.find(c=>c.at!==null&&this.p.count.gte(c.at)&&!this.p.clearedPC.includes(c.id));}
@@ -540,10 +540,11 @@ class EternitySystem{
  resetLower(now=Date.now(),activeChallenge=this.state.activeEC){
   new NukeSystem(this.state).tick(now);
   const s=this.state,eternity=s.eternity,nextCount=s.eternityCount;eternity.lastPassiveAt=now;
+  const retainedPCAccess=activeChallenge?{unlocked:new PunkSystem(s).unlocked,unlockedPC:[...s.punk.unlockedPC]}:{};
   const retainedIC=s.ecClearCount>=4?[...s.completedInfinityChallenges]:[];
   const retainedNodes=s.hasAleph(3)?[...s.infinityNodes]:[],retainedPC=s.hasAleph(7)?[...s.punk.clearedPC]:[];
   eternity.activeChallenge=activeChallenge;
-  const fresh=new GameState({infinityTreeVersion:6,infinityNodes:retainedNodes,punk:{clearedPC:retainedPC},eternityCount:nextCount,eternity,achievements:[...s.achievements],showTrail:s.showTrail,playTime:s.playTime,autoBuy:{...s.autoBuy},autoInfinity:{...s.autoInfinity},...saveResetAutomation(s),completedInfinityChallenges:retainedIC,lastTickAt:now,passiveInfinityLastAt:now,infinityStartedAt:now});
+  const fresh=new GameState({infinityTreeVersion:6,infinityNodes:retainedNodes,punk:{...retainedPCAccess,clearedPC:retainedPC},eternityCount:nextCount,eternity,achievements:[...s.achievements],showTrail:s.showTrail,playTime:s.playTime,autoBuy:{...s.autoBuy},autoInfinity:{...s.autoInfinity},...saveResetAutomation(s),completedInfinityChallenges:retainedIC,lastTickAt:now,passiveInfinityLastAt:now,infinityStartedAt:now});
   Object.assign(s,fresh);delete s._treeSpeedCache;delete s._speedPurchaseContext;
   s.debugScoreOverride=false;s.lastBounceScoreGain=D(0);s.lastBounceCalculation=null;s.lastCupPower=D(1);
   s.currentAutoPrestigeTarget=autoTargetDecimal(s.autoPrestigeInitialPP);s.currentAutoAscensionTarget=autoTargetDecimal(s.autoAscensionInitialAP);
