@@ -441,7 +441,7 @@ const ETERNITY_CHALLENGES=[
  {id:'ec6',name:'撃墜された',goal:'1e35000',restriction:'Nuke実行不可',reward:'無料Nuke回数 +1',pending:null},
  {id:'ec7',name:'木は枯れ果てた',goal:'1e10000',restriction:'アレフツリー効果無効（購入状態は保持）',reward:'アレフ5の効果 ×2'},
  {id:'ec8',name:'根底から崩れる',goal:'1e1050',restriction:'共通指数 ×0.4',reward:'共通指数 ×1.1'},
- {id:'ec9',name:'2大巨頭',goal:'1e15000',restriction:'共通指数 ÷2・速度／倍率獲得量の購入上限Lv6000',reward:'通常強化のScore消費・必要Scoreを撤廃、Lv8000の追加コストSC撤廃'},
+ {id:'ec9',name:'2大巨頭',goal:'1e15000',restriction:'共通指数 ÷2・速度／倍率獲得量の購入上限Lv6000',reward:'通常強化は必要Scoreを満たす場合のみ購入可能（Score消費なし）、Lv8000の追加コストSC撤廃'},
  {id:'ec10',name:'封印、封印、封印',goal:'1e308',restriction:'3倍のContain',reward:'CP獲得量 ×10',pending:'Contain本体の仕様待ち'}
 ];
 const ALEPH_NODES=[
@@ -908,7 +908,7 @@ class UpgradeSystem {
     { id:"speed", name:"速度", get description(){return `速度増加量10%（IU2-1で12%）\n表示速度${formatMultiplier(state.normalSpeedSoftcapStart)}以上：増加量をlog10に圧縮`; }, cost:level => Decimal.pow(1.55 * (this.state.activeIC==="ic3" ? 1.5 : 1), level).mul(12).mul(this.costMultiplier).mul(this.softcapMultiplier("speed",level)).mul(this.state.pc2CostMultiplier), getLevel:() => this.state.upgradeLevels.speed, buy:() => { if(this.state.activeIC==="ic8") this.state.challengeSpeedGainLevels=this.state.challengeSpeedGainLevels.add(1); else this.state.speed = finiteSpeed(finiteSpeed(this.state.speed).add(this.state.speedUpgradeGain)); this.state.upgradeLevels.speed=this.state.upgradeLevels.speed.add(1); } },
     { id:"gain", name:"倍率獲得量", get description(){return state.activeEC==="ec2"?"倍率獲得量強化は反転中（購入するほど減少）":`バウンドごとの倍率獲得量を ${formatMultiplier(D(20).add(state.hasEC("ec2")?state.challengePower.mul(5):0))}% 強化`;}, cost:level => Decimal.pow(this.achievements.gainCostGrowth, level).mul(20).mul(this.costMultiplier).mul(this.softcapMultiplier("gain",level)).mul(this.state.pc2CostMultiplier), getLevel:() => this.state.upgradeLevels.gain, buy:() => { this.state.upgradeLevels.gain=this.state.upgradeLevels.gain.add(1); } },
     {id:"critical",name:"Critical Multiplier",description:"Critical倍率に+1（Punk強化で加算量増加）。初回Punkで解放",get locked(){return state.punk.count.lt(1);},cost:level=>D("1e100").mul(Decimal.pow(10,level)).mul(this.heavyCostMultiplier(level)).mul(this.costMultiplier).mul(this.state.pc2CostMultiplier),getLevel:()=>this.state.upgradeLevels.critical,buy:()=>{this.state.upgradeLevels.critical=this.state.upgradeLevels.critical.add(1);}}
-  ]; for(const upgrade of this.definitions){const baseCost=upgrade.cost;upgrade.cost=level=>this.state.hasEC("ec9")?D(0):baseCost(level);} }
+  ]; }
   bonusLevel(id){return id==="speed"?this.state.infinityUpgradeLevelBonus:id==="gain"?this.state.infinityUpgradeLevelBonus.add(this.state.activeIC==="ic8"?this.state.challengeSpeedGainLevels:0):D(0);}
   levelText(id){return `${this.state.upgradeLevels[id]} + (${this.bonusLevel(id)})`;}
   heavyCostMultiplier(level){if(this.state.hasEC("ec9"))return D(1);return Decimal.pow(BALANCE.UpgradeExtraCostGrowth,D(level).sub(BALANCE.NormalUpgradeHeavyCostStart).max(0));}
@@ -918,7 +918,7 @@ class UpgradeSystem {
   }
   get costMultiplier() { return D(this.achievements.costDiscount).mul(this.state.hasInfinityNode("3-2") ? "0.90" : 1).mul(this.state.hasCompletedIC("ic7") ? this.state.challengeReduction('.80') : 1).mul(D(1).sub(this.infinityCostDiscountPercent.div(100))); }
   isLevelCapped(upgrade) { return (this.state.activeIC==="ic7"&&D(upgrade.getLevel()).gte(450))||(this.state.activeEC==="ec9"&&["speed","gain"].includes(upgrade.id)&&D(upgrade.getLevel()).gte(6000)); }
-  buy(id) { const upgrade = this.definitions.find(item => item.id === id); if (!upgrade || upgrade.locked) return false; const cost = upgrade.cost(upgrade.getLevel()); if (this.isLevelCapped(upgrade)) return false; if (this.state.score.lt(cost)) return false; this.state.nukeSystem.tick();this.state.recordCupThreshold(); this.state.score = this.state.score.sub(cost); upgrade.buy(); return true; }
+  buy(id) { const upgrade = this.definitions.find(item => item.id === id); if (!upgrade || upgrade.locked) return false; const cost = upgrade.cost(upgrade.getLevel()); if (this.isLevelCapped(upgrade)) return false; if (this.state.score.lt(cost)) return false; this.state.nukeSystem.tick();this.state.recordCupThreshold(); if(!this.state.hasEC("ec9"))this.state.score = this.state.score.sub(cost); upgrade.buy(); return true; }
   buyAmount(id, amount, canContinue=()=>true) {
     const previous=this.state._speedPurchaseContext;
     if(id==="speed")this.state._speedPurchaseContext={softcapped:false};
