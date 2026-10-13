@@ -390,6 +390,8 @@ class PunkSystem{
 
 const NUKE_CONFIG=Object.freeze({maxCount:175,firstExponent:'20000',firstGrowth:'1.5',firstEnd:50,secondGrowth:'1.1',secondEnd:100,lateDivisor:'10',latePower:'10',lateGrowth:'1.1',atomTickPower:'.10',atomBase:'2',atomDoubleEvery:'5',bonuses:{sigma:'1.01',sphere:'1.02',atom:'1.01',ep:'1.05'}});
 const NUKE_MILESTONES=[]; // Future rows: {id, count, description, effect:{atomGain:Decimal-compatible multiplier}}.
+const ATOM_COST_PURCHASE_POWER='1.25';
+const ATOM_COST_POWER_DIVISOR='25';
 const ATOM_UPGRADES=[
  {id:'au1',name:'通常ボール速度SC遅延',max:10,effectBase:'2',effectDivisor:'5',costBase:'10',costGrowth:'2.5'},
  {id:'au2',name:'Infinity Ball速度SC軽減',max:50,effectDivisor:'100',costBase:'25',costGrowth:'1.6'},
@@ -413,7 +415,7 @@ class NukeSystem{
  bonus(id){return D(1).add(finitePower(NUKE_CONFIG.bonuses[id],this.count).sub(1).mul(this.state.nukeRewardMultiplier));}
  level(id){return this.atom.levels[id]??D(0);}
  effect(id,level=this.level(id)){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return D(1);const l=D(level),boost=this.bonus('atom');if(id==='au1')return D(1).add(finitePower(u.effectBase,l.div(u.effectDivisor)).sub(1).mul(boost));if(id==='au2')return l.div(u.effectDivisor).mul(boost).clamp(0,1);return D(1).add(l.div(u.effectDivisor).mul(boost));}
- cost(id){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u||this.level(id).gte(u.max))return null;const l=this.level(id);return u.costBase?D(u.costBase).mul(finitePower(u.costGrowth,l)):finitePower(10,D(u.costExponent).add(l.mul(u.costLinear)).add(l.pow(2).mul(u.costQuadratic)));}
+ cost(id){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u||this.level(id).gte(u.max))return null;const l=this.level(id),base=u.costBase?D(u.costBase).mul(finitePower(u.costGrowth,l)):finitePower(10,D(u.costExponent).add(l.mul(u.costLinear)).add(l.pow(2).mul(u.costQuadratic)));return finitePower(base,finitePower(ATOM_COST_PURCHASE_POWER,l).div(ATOM_COST_POWER_DIVISOR));}
  buy(id,now=Date.now()){const cost=this.cost(id);if(cost===null||this.count.lt(1))return false;this.tick(now);if(this.atom.amount.lt(cost))return false;settleEternityEffects(this.state,now);this.atom.amount=this.atom.amount.sub(cost);this.atom.levels[id]=this.level(id).add(1);delete this.state._treeSpeedCache;return true;}
  buyMax(id,now=Date.now()){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return 0;let bought=0;while(bought<u.max&&this.buy(id,now))bought++;return bought;}
  get ticksPerSecond(){return this.count.lt(1)?D(0):finitePower(this.state.effectiveSpeed,this.state.atomTickPower).mul(this.state.atomTickSpeedMultiplier);}
