@@ -398,7 +398,15 @@ class PunkSystem{
 }
 
 const NUKE_CONFIG=Object.freeze({maxCount:175,firstExponent:'20000',firstGrowth:'1.5',firstEnd:50,secondGrowth:'1.1',secondEnd:100,lateDivisor:'10',latePower:'10',lateGrowth:'1.1',atomTickPower:'.05',atomTickDivisor:'2',atomSpeedMinimum:'1e-300',atomBase:'2',atomDoubleEvery:'5',bonuses:{sigma:'1.01',sphere:'1.02',atom:'1.01',ep:'1.05'}});
-const NUKE_MILESTONES=[]; // Future rows: {id, count, description, effect:{atomGain:Decimal-compatible multiplier}}.
+const NUKE_MILESTONES=[
+ {id:'nuke-4',count:4,description:'EP獲得量 ×100',effect:{epGain:100}},
+ {id:'nuke-6',count:6,description:'IP獲得量 ×10,000',effect:{ipGain:10000}},
+ {id:'nuke-10',count:10,description:'共通指数 +0.1',commonExponent:'.1'},
+ {id:'nuke-12',count:12,description:'ℵツリーノード16まで解放'},
+ {id:'nuke-15',count:15,description:'Atom獲得量 ×2',effect:{atomGain:2}},
+ {id:'nuke-20',count:20,description:'AU1〜AU6の最大レベル +1'},
+ {id:'nuke-30',count:30,description:'Gem購入コスト ×1,000',effect:{gemCost:1000}}
+];
 const ATOM_COST_CURVE_POWER='1.5';
 const AU5_COST={start:'1000',scale:'10',power:'1.5'};
 const AU6_COST={start:'1e9',scale:'5',power:'1.5'};
@@ -412,9 +420,9 @@ const ATOM_UPGRADES=[
  {id:'au6',name:'PC6・PC7デバフ軽減',max:10,costStart:AU6_COST.start,costScale:AU6_COST.scale,costPower:AU6_COST.power}
 ];
 function loadNuke(data={}){const n=data||{};return {count:readDecimal(n.count).min(NUKE_CONFIG.maxCount),freeCount:readDecimal(n.freeCount),milestones:Array.isArray(n.milestones)?n.milestones.filter(id=>NUKE_MILESTONES.some(m=>m.id===id)):[]};}
-function loadAtom(data={}){const a=data||{};return {amount:readDecimal(a.amount),levels:Object.fromEntries(ATOM_UPGRADES.map(u=>[u.id,readDecimal(a.levels?.[u.id]).floor().min(u.max)])),lastAt:typeof a.lastAt==='number'&&Number.isFinite(a.lastAt)?a.lastAt:Date.now()};}
+function loadAtom(data={},maxBonus=0){const a=data||{};return {amount:readDecimal(a.amount),levels:Object.fromEntries(ATOM_UPGRADES.map(u=>[u.id,readDecimal(a.levels?.[u.id]).floor().min(u.max+maxBonus)])),lastAt:typeof a.lastAt==='number'&&Number.isFinite(a.lastAt)?a.lastAt:Date.now()};}
 class NukeSystem{
- constructor(state){this.state=state;}
+ constructor(state){this.state=state;this.refreshMilestones();}
  get data(){return this.state.eternity.nuke;}
  get atom(){return this.state.eternity.atom;}
  get count(){return this.data.count.add(this.data.freeCount).min(NUKE_CONFIG.maxCount);}
@@ -424,18 +432,30 @@ class NukeSystem{
  get available(){return !this.blockReason;}
  perform(now=Date.now()){if(!this.available)return false;settleEternityEffects(this.state,now);this.data.count=this.data.count.add(1);this.refreshMilestones();if(this.count.gte(1)&&!this.state.achievements.includes("nuke-1"))new AchievementSystem(this.state).check();return true;}
  refreshMilestones(){for(const m of NUKE_MILESTONES)if(this.count.gte(m.count)&&!this.data.milestones.includes(m.id))this.data.milestones.push(m.id);}
+ isMilestoneUnlocked(id){const m=NUKE_MILESTONES.find(row=>row.id===id);return !!m&&this.count.gte(m.count);}
  milestoneMultiplier(key){this.refreshMilestones();return NUKE_MILESTONES.filter(m=>this.data.milestones.includes(m.id)).reduce((value,m)=>value.mul(m.effect?.[key]??1),D(1));}
+ get milestoneCommonExponent(){this.refreshMilestones();return NUKE_MILESTONES.filter(m=>this.data.milestones.includes(m.id)).reduce((value,m)=>value.add(m.commonExponent||0),D(0));}
+ get atomContinuingMultiplier(){return finitePower('1.1',this.count.sub(30).max(0).div(10).floor());}
+ get atomMilestoneMultiplier(){return this.milestoneMultiplier('atomGain').mul(this.atomContinuingMultiplier);}
+ get epContinuingMultiplier(){return this.count.lt(35)?D(1):D(10).mul(this.count.sub(30).div(5).floor()).max(1);}
+ get epMilestoneMultiplier(){return this.milestoneMultiplier('epGain').mul(this.epContinuingMultiplier);}
+ get ipMilestoneMultiplier(){return this.milestoneMultiplier('ipGain');}
+ get maxLevelBonus(){return this.isMilestoneUnlocked('nuke-20')?1:0;}
+ maxLevel(id){const u=ATOM_UPGRADES.find(row=>row.id===id);return u?u.max+this.maxLevelBonus:0;}
+ get allUpgradesMaxed(){return ATOM_UPGRADES.every(u=>this.level(u.id).gte(this.maxLevel(u.id)));}
+ get atomEPBonus(){return this.allUpgradesMaxed?finitePower(this.atom.amount,'.1'):D(0);}
+ get effectiveEPConstant(){return D(-307).add(this.atomEPBonus);}
  bonus(id){if(this.state.activeEC==='ec6')return D(1);return D(1).add(finitePower(NUKE_CONFIG.bonuses[id],this.count).sub(1).mul(this.state.nukeRewardMultiplier).mul(this.state.auNbStrength));}
  level(id){return this.atom.levels[id]??D(0);}
   get nukeStrength(){return this.state.auNbStrength;}
- get effectiveLevel(){return id=>{const u=ATOM_UPGRADES.find(row=>row.id===id);return D(this.level(id)).floor().clamp(0,u?.max??0).mul(this.nukeStrength);};}
- effect(id,level=this.level(id)){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return D(1);const l=D(level).floor().clamp(0,u.max).mul(this.nukeStrength),boost=this.bonus('atom');if(id==='au1')return D(1).add(finitePower(u.effectBase,l.div(u.effectDivisor)).sub(1).mul(boost));if(id==='au2')return l.div(u.effectDivisor).mul(boost).clamp(0,1);if(id==='au3'||id==='au4')return D(1).add(l.div(u.effectDivisor).mul(boost));if(id==='au5')return D(1).add(l);if(id==='au6')return l;return D(1);}
- cost(id){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u||this.level(id).gte(u.max))return null;const l=this.level(id);if(u.costStart)return D(u.costStart).mul(finitePower(10,D(u.costScale).mul(finitePower(l.div(u.max),u.costPower))));return u.costBase?D(u.costBase).mul(finitePower(10,D(u.costScale).mul(finitePower(l.div(u.max),ATOM_COST_CURVE_POWER)))):finitePower(10,D(u.costExponent).add(l.mul(u.costLinear)).add(l.pow(2).mul(u.costQuadratic)));}
+ get effectiveLevel(){return id=>D(this.level(id)).floor().clamp(0,this.maxLevel(id)).mul(this.nukeStrength);}
+ effect(id,level=this.level(id)){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return D(1);const l=D(level).floor().clamp(0,this.maxLevel(id)).mul(this.nukeStrength),boost=this.bonus('atom');if(id==='au1')return D(1).add(finitePower(u.effectBase,l.div(u.effectDivisor)).sub(1).mul(boost));if(id==='au2')return l.div(u.effectDivisor).mul(boost).clamp(0,1);if(id==='au3'||id==='au4')return D(1).add(l.div(u.effectDivisor).mul(boost));if(id==='au5')return D(1).add(l);if(id==='au6')return l;return D(1);}
+ cost(id){const u=ATOM_UPGRADES.find(u=>u.id===id),max=this.maxLevel(id);if(!u||this.level(id).gte(max))return null;const l=this.level(id);if(u.costStart)return D(u.costStart).mul(finitePower(10,D(u.costScale).mul(finitePower(l.div(max),u.costPower))));return u.costBase?D(u.costBase).mul(finitePower(10,D(u.costScale).mul(finitePower(l.div(max),ATOM_COST_CURVE_POWER)))):finitePower(10,D(u.costExponent).add(l.mul(u.costLinear)).add(l.pow(2).mul(u.costQuadratic)));}
  buy(id,now=Date.now()){const cost=this.cost(id);if(cost===null||this.count.lt(1))return false;this.tick(now);if(this.atom.amount.lt(cost))return false;settleEternityEffects(this.state,now);this.atom.amount=this.atom.amount.sub(cost);this.atom.levels[id]=this.level(id).add(1);delete this.state._treeSpeedCache;if(id==="au5"&&this.level(id).gte(40)&&!this.state.achievements.includes("au5-40"))new AchievementSystem(this.state).check();return true;}
- buyMax(id,now=Date.now()){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return 0;let bought=0;while(bought<u.max&&this.buy(id,now))bought++;return bought;}
+ buyMax(id,now=Date.now()){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return 0;let bought=0;while(bought<this.maxLevel(id)&&this.buy(id,now))bought++;return bought;}
  get ticksPerSecond(){return this.count.lt(1)?D(0):finitePower(this.state.effectiveSpeed.max(NUKE_CONFIG.atomSpeedMinimum),this.state.atomTickPower).div(NUKE_CONFIG.atomTickDivisor).mul(this.state.atomTickSpeedMultiplier);}
  get perTick(){return this.count.lt(1)?D(0):finitePower(NUKE_CONFIG.atomBase,this.count.sub(1).div(NUKE_CONFIG.atomDoubleEvery));}
- get gainMultiplier(){return this.state.atomGainMultiplier.mul(this.milestoneMultiplier('atomGain'));}
+ get gainMultiplier(){return this.state.atomGainMultiplier.mul(this.atomMilestoneMultiplier);}
  get perSecond(){return this.ticksPerSecond.mul(this.perTick).mul(this.gainMultiplier);}
  tick(now=Date.now()){const seconds=Math.max(0,now-this.atom.lastAt)/1000;this.atom.lastAt=Math.max(now,this.atom.lastAt);if(!seconds||this.count.lt(1))return D(0);const gain=this.perSecond.mul(seconds);this.atom.amount=this.atom.amount.add(gain);if(this.atom.amount.gte(20000)&&!this.state.achievements.includes("atom-20000"))new AchievementSystem(this.state).check();return gain;}
 }
@@ -447,7 +467,8 @@ function eternitySoftcap(value,threshold){value=D(value);threshold=D(threshold);
 function loadEternity(data={}){
  const e=data&&typeof data==='object'?data:{};
  const ecClears=Object.fromEntries(Array.from({length:10},(_,i)=>['ec'+(i+1),{1:e.ecClears?.['ec'+(i+1)]?.[1]===true,2:e.ecClears?.['ec'+(i+1)]?.[2]===true}]));
- return {schema:1,points:readDecimal(e.points),ecClears,automation:{ballCreate:e.automation?.ballCreate===true,ballSpeed:e.automation?.ballSpeed===true,ballGain:e.automation?.ballGain===true,sphere:e.automation?.sphere===true},lastPassiveAt:typeof e.lastPassiveAt==='number'&&Number.isFinite(e.lastPassiveAt)?e.lastPassiveAt:Date.now(),activeChallenge:ETERNITY_CHALLENGES.some(c=>c.id===e.activeChallenge&&!c.pending)?e.activeChallenge:null,gem:loadGems(e.gem),alephTree:{purchased:Array.isArray(e.alephTree?.purchased)?[...new Set(e.alephTree.purchased.filter(id=>ALEPH_NODES.some(n=>n.id===id&&!n.placeholder)))]:[]},nuke:loadNuke(e.nuke),contain:e.contain||{},containUpgrades:e.containUpgrades||{},line:e.line||{},atom:loadAtom(e.atom)};
+ const nuke=loadNuke(e.nuke),auMaxBonus=nuke.count.add(nuke.freeCount).gte(20)?1:0;
+ return {schema:1,points:readDecimal(e.points),ecClears,automation:{ballCreate:e.automation?.ballCreate===true,ballSpeed:e.automation?.ballSpeed===true,ballGain:e.automation?.ballGain===true,sphere:e.automation?.sphere===true},lastPassiveAt:typeof e.lastPassiveAt==='number'&&Number.isFinite(e.lastPassiveAt)?e.lastPassiveAt:Date.now(),activeChallenge:ETERNITY_CHALLENGES.some(c=>c.id===e.activeChallenge&&!c.pending)?e.activeChallenge:null,gem:loadGems(e.gem),alephTree:{purchased:Array.isArray(e.alephTree?.purchased)?[...new Set(e.alephTree.purchased.filter(id=>ALEPH_NODES.some(n=>n.id===id&&!n.placeholder)))]:[]},nuke,contain:e.contain||{},containUpgrades:e.containUpgrades||{},line:e.line||{},atom:loadAtom(e.atom,auMaxBonus)};
 }
 const ETERNITY_CHALLENGES=[
  {id:'ec1',name:'何よりも遅い',goal:'1e5000',restriction:'ボール速度 ÷50',reward:'速度に速度^1.2を乗算。補正前速度が200万超ならlog10(速度^1.2)を乗算'},
@@ -521,7 +542,7 @@ class GemSystem{
  get redExponentMultiplier(){return this.highMultiplier('red',finitePower('1.1',Math.max(0,this.level('red')-6)));}
  get greenAtomMultiplier(){return this.highMultiplier('green',D(Math.max(0,this.level('green')-6)).mul('1.1'));}
  get growth(){let rate=D(this.state.hasAleph(15)?5:10);if(this.state.hasEC('ec5'))rate=rate.mul(this.state.challengeReduction('.5'));return rate.max(1);}
- get cost(){const reset=this.data.priceResetAt;return D(reset===null?1000:10000).mul(finitePower(this.growth,this.data.purchases.sub(reset===null?0:reset).max(0)));}
+ get cost(){const reset=this.data.priceResetAt,initial=D(reset===null?1000:10000).mul(this.state.nukeSystem.milestoneMultiplier('gemCost'));return initial.mul(finitePower(this.growth,this.data.purchases.sub(reset===null?0:reset).max(0)));}
  applyPriceReset(){if(this.state.hasAleph(10)&&this.data.inventory.black.level>0&&this.data.priceResetAt===null)this.data.priceResetAt=D(this.data.purchases);}
  buy(){if(!this.unlocked||this.state.eternity.points.lt(this.cost))return false;const missing=GEM_DEFINITIONS.filter(g=>!this.data.inventory[g.id].level);const pool=missing.length>1?missing.filter(g=>g.id!=='black'):missing.length?missing:GEM_DEFINITIONS;settleEternityEffects(this.state);const selected=pool[Math.min(pool.length-1,Math.max(0,Math.floor(this.rng()*pool.length)))].id;this.state.eternity.points=this.state.eternity.points.sub(this.cost);const row=this.data.inventory[selected];if(!row.level){row.level=1;this.data.equipped.push(selected);}else row.copies=row.copies.add(1);this.data.purchases=this.data.purchases.add(1);this.applyPriceReset();return selected;}
  upgrade(id){const row=this.data.inventory[id];if(!this.unlocked||!row||row.level<1||row.level>=10)return false;const cost=GEM_LEVEL_COSTS[row.level-1];if(row.copies.lt(cost))return false;settleEternityEffects(this.state);row.copies=row.copies.sub(cost);row.level++;return true;}
@@ -531,7 +552,7 @@ class AlephTreeSystem{
  constructor(state){this.state=state;}
  get(id){return ALEPH_NODES.find(n=>n.id===id);}
  // Nodes 13+ await their explicit progression requirements. Purchased legacy nodes remain available.
- meetsUnlockCondition(id){return id<=12;}
+ meetsUnlockCondition(id){return id<=(this.state.nukeSystem.isMilestoneUnlocked('nuke-12')?16:12);}
  isRevealed(id){const node=this.get(id);return !!node&&!node.placeholder&&(this.state.eternity.alephTree.purchased.includes(id)||this.meetsUnlockCondition(id));}
  canBuy(id){const node=this.get(id);return this.isRevealed(id)&&this.state.eternityCount.gte(1)&&!this.state.eternity.alephTree.purchased.includes(id)&&node.requires.every(n=>this.state.eternity.alephTree.purchased.includes(n))&&this.state.eternity.points.gte(node.cost);}
  buy(id){if(!this.canBuy(id))return false;settleEternityEffects(this.state);this.state.eternity.points=this.state.eternity.points.sub(this.get(id).cost);this.state.eternity.alephTree.purchased.push(id);new GemSystem(this.state).applyPriceReset();new PunkSystem(this.state).refreshUnlocks();if(id===1&&!this.state.achievements.includes("aleph-1"))new AchievementSystem(this.state).check();return true;}
@@ -549,7 +570,11 @@ class EternitySystem{
  constructor(state){this.state=state;this.purchaseCursor=0;}
  get blockReason(){if(this.state.activeEC)return 'Eternity Challengeを退出してください';if(!this.state.hasPC('pc5'))return 'PC5のクリアが必要です';if(this.state.infinityPoints.lt('1e308'))return '所持IPが1e308未満です';return '';}
  get available(){return !this.blockReason;}
- get pendingPoints(){if(!this.available)return D(0);const base=D(this.state.infinityPoints.log10()).sub(307).add(this.state.gems.high('purple').mul(2)).max(0);return finitePower(base.mul(this.state.ecClearCount>=2?this.state.milestoneMultiplier(this.state.ecClearCount):1).mul(this.state.epMultiplier).mul(this.state.gems.yellowEPMultiplier),this.state.gems.yellowEPExponent);}
+ get atomUpgradesMaxed(){return this.state.nukeSystem.allUpgradesMaxed;}
+ get atomEPBonus(){return this.state.nukeSystem.atomEPBonus;}
+ get effectiveEPConstant(){return this.state.nukeSystem.effectiveEPConstant;}
+ get basePoints(){const log=D(this.state.infinityPoints.log10()),constant=this.effectiveEPConstant;const base=constant.lte(0)?log.add(constant):log.mul(D(1).add(constant));return base.add(this.state.gems.high('purple').mul(2)).max(0);}
+ get pendingPoints(){if(!this.available)return D(0);const formulaGain=finitePower(this.basePoints,this.state.gems.yellowEPExponent);return formulaGain.mul(this.state.ecClearCount>=2?this.state.milestoneMultiplier(this.state.ecClearCount):1).mul(this.state.epMultiplier).mul(this.state.gems.yellowEPMultiplier);}
  recordChallengeClear(id,difficulty){if(!/^ec(?:[1-9]|10)$/.test(id)||![1,2].includes(difficulty))return false;const row=this.state.eternity.ecClears[id];if(row[difficulty])return false;row[difficulty]=true;if(id==='ec6'&&difficulty===1)this.state.eternity.nuke.freeCount=this.state.eternity.nuke.freeCount.add(this.state.challengePower);return true;}
  perform(now=Date.now()){
   if(!this.available)return false;
@@ -630,7 +655,7 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   get activePC(){return this.punk.currentPC;}
   hasPunkMilestone(id){return this.punk.count.gte([0,1,2,5,7,10][id]);}
   get punkExponentBonus(){return this.punk.count.mul('.05').add(this.hasPunkMilestone(5)?this.milestonePower.mul('.05'):0);}
-  get effectiveCommonExponent(){let value=D(this.commonExponent).add(this.punkExponentBonus).add(this.hasCompletedIC('ic5')?this.challengePower.sub(1).mul('.1'):0).add(this.hasPC('pc5')?this.challengePower.mul('.1'):0);value=value.mul(this.gems.redExponentMultiplier).mul(this.hasEC('ec8')?this.challengeMultiplier('1.1'):1);return value.mul(this.activeEC==='ec8'?'.4':this.activeEC==='ec9'?'.5':1);}
+  get effectiveCommonExponent(){let value=D(this.commonExponent).add(this.punkExponentBonus).add(this.hasCompletedIC('ic5')?this.challengePower.sub(1).mul('.1'):0).add(this.hasPC('pc5')?this.challengePower.mul('.1'):0);value=value.mul(this.gems.redExponentMultiplier).mul(this.hasEC('ec8')?this.challengeMultiplier('1.1'):1);return value.mul(this.activeEC==='ec8'?'.4':this.activeEC==='ec9'?'.5':1).add(this.nukeSystem.milestoneCommonExponent);}
   get scoreExponent(){return this.activePC==='pc5'?this.effectiveCommonExponent.pow('.01').add(this.punk.spheres.div(1000)):this.effectiveCommonExponent;}
   get punkInfinityScoreExponentText(){return `^${formatMultiplier(this.punkInfinityScoreExponent)}${this.hasPC("pc1")?"（PC1報酬・累計Punk回数を反映）":"（PC1未クリア）"}`;}
   get punkInfinityScoreExponent(){return this.hasPC('pc1')?this.effectiveCommonExponent.div(2).add(this.punk.count.max(0).mul('.077')).max(1):D(1);}
@@ -667,7 +692,7 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   get alephIPMultiplier(){if(!this.hasAleph(4))return D(1);const x=this.eternity.points.div(2).max(1),raw=D(x.log(5));return this.alephMultiplier((raw.gt(100)?D(x.log(12)):raw).max(1));}
   get eternityCountGain(){let gain=this.hasAleph(5)?this.alephMultiplier(D(2).mul(this.hasEC('ec7')?this.challengeMultiplier(2):1)):D(1);return gain.mul(D(1).add(this.gems.high('blue').mul('.1')));}
   get eternityMilestoneEPMultiplier(){return [12,20,27].reduce((gain,count)=>this.hasEternityMilestone(count)?gain.mul(this.milestoneMultiplier(2)):gain,D(1));}
-  get epMultiplier(){return this.eternityMilestoneEPMultiplier.mul(this.hasAleph(9)?this.alephMultiplier(2):1).mul(this.hasAleph(14)?this.alephMultiplier(100):1).mul(D(1).add(this.gems.normal('blue','.1','.05'))).mul(this.nukeSystem.bonus('ep')).mul(this.nukeSystem.effect('au5'));}
+  get epMultiplier(){return this.eternityMilestoneEPMultiplier.mul(this.hasAleph(9)?this.alephMultiplier(2):1).mul(this.hasAleph(14)?this.alephMultiplier(100):1).mul(D(1).add(this.gems.normal('blue','.1','.05'))).mul(this.nukeSystem.bonus('ep')).mul(this.nukeSystem.effect('au5')).mul(this.nukeSystem.epMilestoneMultiplier);}
   get atomGainMultiplier(){const raw=this.eternityCount.max(1),a=D(raw.log10());const tree=this.hasAleph(11)?this.alephMultiplier((a.gt(10)?D(raw.log(15)):a).max(1)):D(1);return tree.mul(this.gems.greenAtomMultiplier).mul(this.ecClearCount>=20?this.milestoneMultiplier(10000):1).mul(this.hasPC('pc8')?1.1:1);}
   get atomTickPower(){return D(NUKE_CONFIG.atomTickPower).add(this.hasAleph(12)?this.alephAddition('.01'):0);}
   get atomTickSpeedMultiplier(){return D(1);}
@@ -1080,7 +1105,7 @@ class InfinitySystem {
     .mul(s.achievement36IPMultiplier).mul(s.eternityBonus("ip")).mul(s.alephIPMultiplier);
   }
   get rawPendingPoints(){return this.basePoints.mul(this.multiplierTotal);}
-  get pendingPoints(){let gain=this.rawPendingPoints;if(this.state.hasReward("infinity-score-1e25"))gain=finitePower(gain,BALANCE.Achievement48IPPower);if(this.state.hasPunkMilestone(4))gain=finitePower(gain,this.state.milestoneMultiplier("1.2"));if(this.state.hasPC("pc5"))gain=finitePower(gain,"1.05");if(this.state.hasAleph(13))gain=finitePower(gain,this.state.alephMultiplier("1.21"));if(this.state.activePC==='pc6')gain=finitePower(gain,new PunkSystem(this.state).pc6Exponent);else if(this.state.hasPC('pc6'))gain=finitePower(gain,'1.1');return this.state.eternityBroken?gain:gain.min(D(BALANCE.InfinityPointCap).sub(this.state.infinityPoints).max(0));}
+  get pendingPoints(){let gain=this.rawPendingPoints;if(this.state.hasReward("infinity-score-1e25"))gain=finitePower(gain,BALANCE.Achievement48IPPower);if(this.state.hasPunkMilestone(4))gain=finitePower(gain,this.state.milestoneMultiplier("1.2"));if(this.state.hasPC("pc5"))gain=finitePower(gain,"1.05");if(this.state.hasAleph(13))gain=finitePower(gain,this.state.alephMultiplier("1.21"));if(this.state.activePC==='pc6')gain=finitePower(gain,new PunkSystem(this.state).pc6Exponent);else if(this.state.hasPC('pc6'))gain=finitePower(gain,'1.1');gain=gain.mul(this.state.nukeSystem.ipMilestoneMultiplier);return this.state.eternityBroken?gain:gain.min(D(BALANCE.InfinityPointCap).sub(this.state.infinityPoints).max(0));}
   perform() { this.state.tickPassiveInfinity(); this.state.recordInfinityArrival(); new AchievementSystem(this.state).check(); const gain=this.pendingPoints; if (!this.available || (gain.lte(0)&&this.state.infinityPoints.lt(BALANCE.InfinityPointCap)&&!this.challenges.get(this.state.activeInfinityChallenge))) return false; const completed=this.challenges.completeActive(); this.state.infinityPoints=this.state.capInfinityPoints(this.state.infinityPoints.add(gain)); this.state.infinityCount=this.state.infinityCount.add(this.state.infinityCountGain); this.state.infinityReached=true; new AchievementSystem(this.state).check(); this.state.resetForInfinity(); if (this.state.hasInfinityNode("11-1")) { this.state.score=D(100); this.state.ascensionCount=D(2); this.state.speed=this.state.initialSpeed;this.state.applyEternityInitialUpgrades(); } return completed || true; }
 }
 
@@ -1478,9 +1503,9 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
 
   nukeMarkup(){
     const s=this.state,n=s.nukeSystem;n.refreshMilestones();const exponent=n.nextExponent,requirement=exponent===null?'現在の暫定上限（175回）':exponent.lte('8e15')?formatScientific(Decimal.pow(10,exponent)):`10 ^ (${format(exponent)})`;
-    const stat=(label,value)=>`<div><dt>${label}</dt><dd>${value}</dd></div>`;
-    const effectText=(id,level)=>{const effect=n.effect(id,level);if(id==='au1')return `速度SC開始 ×${formatMultiplier(effect)}（${format(D(CONFIG.speedUpgradeSoftCap).mul(effect))}）`;if(id==='au2'){const p=D(BALANCE.InfinityBallSpeedGainSoftcapPower).add(D(1).sub(BALANCE.InfinityBallSpeedGainSoftcapPower).mul(effect));return `軽減率 ${formatMultiplier(effect.mul(100))}% ／ SC指数 ^${formatMultiplier(p)}`;}if(id==='au3')return `P.mult SC3・A.mult SC2・Infinity倍率SC1の開始倍率 ×${formatMultiplier(effect)}`;if(id==='au4')return `通常ボール速度 ^${formatMultiplier(effect)}`;if(id==='au5')return `EP獲得量 ×${formatMultiplier(effect)}`;return `PC6 IP指数 ^${formatMultiplier(D('.05').add(effect.mul('.05')).min(1))} ／ PC7速度指数 ^${formatMultiplier(D('.10').add(effect.mul('.05')).min(1))}`;};
-    return `<section class="nuke-view"><h2>Nuke / Atom</h2><dl class="stats-grid">${stat('Nuke回数',format(n.count)+' / '+NUKE_CONFIG.maxCount)}${stat('うち無料回数',format(n.data.freeCount))}${stat('次回必要Score',requirement)}${stat('Atom所持量',formatMultiplier(n.atom.amount))}${stat('Atom / 秒',formatMultiplier(n.perSecond))}${stat('基礎Atom / tick',formatMultiplier(n.perTick))}${stat('Atom獲得倍率','×'+formatMultiplier(n.gainMultiplier))}${stat('Atom tick / 秒',formatMultiplier(n.ticksPerSecond))}${stat('Atom基本ティック指数','^'+formatMultiplier(D(NUKE_CONFIG.atomTickPower)))}${stat('Atom実効ティック指数','^'+formatMultiplier(s.atomTickPower))}</dl><button data-nuke-perform ${n.available?'':'disabled'}>NUKE</button><p>${n.blockReason||'実行可能。Scoreを消費せず、下位進行もリセットしません。'}</p><p>AtomはNuke回数1以上で時間経過により生成されます。基本tick/秒 = 最終通常ボール速度^${NUKE_CONFIG.atomTickPower} ÷${NUKE_CONFIG.atomTickDivisor}（AU4適用済みの速度を使用）。通常のEternityではNuke・Atom・AUを保持します。</p><h3>Nuke回数ボーナス</h3><dl class="stats-grid">${[['sigma','Σボーナス6種（既存SC後）'],['sphere','Sphere Upgradeの強化部分'],['atom','Atom Upgradeの強化部分'],['ep','EP獲得量']].map(([id,label])=>stat(label,'×'+formatMultiplier(n.bonus(id)))).join('')}</dl><h3>Atom Upgrade</h3><div class="challenge-grid">${ATOM_UPGRADES.map(u=>{const level=n.level(u.id),cost=n.cost(u.id);return `<article class="challenge-card"><h3>${u.id.toUpperCase()} · ${u.name}</h3><p>Lv.${format(level)} / ${u.max}</p><p>現在：${effectText(u.id,level)}</p><p>${cost===null?'最大レベル':'次：'+effectText(u.id,level.add(1))}</p><button data-au-buy="${u.id}" ${n.count.gte(1)&&cost!==null&&n.atom.amount.gte(cost)?'':'disabled'}>${cost===null?'MAX LEVEL':'購入 — '+formatMultiplier(cost)+' Atom'}</button><button data-au-max="${u.id}" ${n.count.gte(1)&&cost!==null&&n.atom.amount.gte(cost)?'':'disabled'}>MAX購入</button></article>`;}).join('')}</div><h3>Nuke回数マイルストーン</h3>${NUKE_MILESTONES.length?`<div class="challenge-grid">${NUKE_MILESTONES.map(m=>`<article class="challenge-card ${n.data.milestones.includes(m.id)?'is-complete':''}"><h3>${m.count}回 · ${n.data.milestones.includes(m.id)?'達成済み':'未達成'}</h3><p>${m.description}</p></article>`).join('')}</div>`:'<p>達成条件・報酬は今後追加予定です。</p>'}</section>`;
+    const stat=(label,value)=>`<div><dt>${label}</dt><dd>${value}</dd></div>`,ep=new EternitySystem(s);
+    const effectText=(id,level)=>{const effect=n.effect(id,level);if(id==='au1')return `速度SC開始 ×${formatMultiplier(effect)}（${format(D(CONFIG.speedUpgradeSoftCap).mul(effect))}）`;if(id==='au2'){const p=D(BALANCE.InfinityBallSpeedGainSoftcapPower).add(D(1).sub(BALANCE.InfinityBallSpeedGainSoftcapPower).mul(effect)).add(s.gems.infinityBallSpeedExponent);return `軽減率 ${formatMultiplier(effect.mul(100))}% ／ SC指数 ^${formatMultiplier(p)}`;}if(id==='au3')return `P.mult SC3・A.mult SC2・Infinity倍率SC1の開始倍率 ×${formatMultiplier(effect)}`;if(id==='au4')return `通常ボール速度 ^${formatMultiplier(effect)}`;if(id==='au5')return `EP獲得量 ×${formatMultiplier(effect)}`;return `PC6 IP指数 ^${formatMultiplier(D('.05').add(effect.mul('.05')).min(1))} ／ PC7速度指数 ^${formatMultiplier(D('.10').add(effect.mul('.05')).min(1))}`;};
+    return `<section class="nuke-view"><h2>Nuke / Atom</h2><dl class="stats-grid">${stat('Nuke回数',format(n.count)+' / '+NUKE_CONFIG.maxCount)}${stat('うち無料回数',format(n.data.freeCount))}${stat('次回必要Score',requirement)}${stat('Atom所持量',formatMultiplier(n.atom.amount))}${stat('Atom / 秒',formatMultiplier(n.perSecond))}${stat('基礎Atom / tick',formatMultiplier(n.perTick))}${stat('Atom獲得倍率','×'+formatMultiplier(n.gainMultiplier))}${stat('Atom tick / 秒',formatMultiplier(n.ticksPerSecond))}${stat('Atom基本ティック指数','^'+formatMultiplier(D(NUKE_CONFIG.atomTickPower)))}${stat('Atom実効ティック指数','^'+formatMultiplier(s.atomTickPower))}${stat('Atom継続報酬倍率','×'+formatMultiplier(n.atomContinuingMultiplier))}${stat('EP継続報酬倍率','×'+formatMultiplier(n.epContinuingMultiplier))}${stat('AU1〜AU6最大レベル',n.allUpgradesMaxed?'全て最大':'未達成')}${stat('AtomEPBonus',formatMultiplier(ep.atomEPBonus))}${stat('EffectiveEPConstant',format(ep.effectiveEPConstant))}${stat('EP基礎式',ep.effectiveEPConstant.gt(0)?'乗算：log10(IP) × (1 + 定数)':'加算：log10(IP) + 定数')}</dl><button data-nuke-perform ${n.available?'':'disabled'}>NUKE</button><p>${n.blockReason||'実行可能。Scoreを消費せず、下位進行もリセットしません。'}</p><p>AtomはNuke回数1以上で時間経過により生成されます。基本tick/秒 = 最終通常ボール速度^${NUKE_CONFIG.atomTickPower} ÷${NUKE_CONFIG.atomTickDivisor}（AU4適用済みの速度を使用）。通常のEternityではNuke・Atom・AUを保持します。</p><h3>Nuke回数ボーナス</h3><dl class="stats-grid">${[['sigma','Σボーナス6種（既存SC後）'],['sphere','Sphere Upgradeの強化部分'],['atom','Atom Upgradeの強化部分'],['ep','EP獲得量']].map(([id,label])=>stat(label,'×'+formatMultiplier(n.bonus(id)))).join('')}</dl><h3>Atom Upgrade</h3><div class="challenge-grid">${ATOM_UPGRADES.map(u=>{const level=n.level(u.id),cost=n.cost(u.id);return `<article class="challenge-card"><h3>${u.id.toUpperCase()} · ${u.name}</h3><p>Lv.${format(level)} / ${n.maxLevel(u.id)}</p><p>現在：${effectText(u.id,level)}</p><p>${cost===null?'最大レベル':'次：'+effectText(u.id,level.add(1))}</p><button data-au-buy="${u.id}" ${n.count.gte(1)&&cost!==null&&n.atom.amount.gte(cost)?'':'disabled'}>${cost===null?'MAX LEVEL':'購入 — '+formatMultiplier(cost)+' Atom'}</button><button data-au-max="${u.id}" ${n.count.gte(1)&&cost!==null&&n.atom.amount.gte(cost)?'':'disabled'}>MAX購入</button></article>`;}).join('')}</div><h3>Nuke回数マイルストーン</h3>${NUKE_MILESTONES.length?`<div class="challenge-grid">${NUKE_MILESTONES.map(m=>`<article class="challenge-card ${n.isMilestoneUnlocked(m.id)?'is-complete':''}"><h3>${m.count}回 · ${n.isMilestoneUnlocked(m.id)?'達成済み':'未達成'}</h3><p>${m.description}</p></article>`).join('')}</div>`:'<p>達成条件・報酬は今後追加予定です。</p>'}</section>`;
   }
 
   eternityMarkup(){
