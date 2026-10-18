@@ -443,13 +443,13 @@ class NukeSystem{
  get maxLevelBonus(){return this.isMilestoneUnlocked('nuke-20')?1:0;}
  maxLevel(id){const u=ATOM_UPGRADES.find(row=>row.id===id);return u?u.max+this.maxLevelBonus:0;}
  get allUpgradesMaxed(){return ATOM_UPGRADES.every(u=>this.level(u.id).gte(this.maxLevel(u.id)));}
- get atomEPBonus(){return this.allUpgradesMaxed?finitePower(this.atom.amount,'.1'):D(0);}
+ get atomEPBonus(){return this.state.activeEC==='ec6'?D(0):this.allUpgradesMaxed?finitePower(this.atom.amount,'.1'):D(0);}
  get effectiveEPConstant(){return D(-307).add(this.atomEPBonus);}
  bonus(id){if(this.state.activeEC==='ec6')return D(1);return D(1).add(finitePower(NUKE_CONFIG.bonuses[id],this.count).sub(1).mul(this.state.nukeRewardMultiplier).mul(this.state.auNbStrength));}
  level(id){return this.atom.levels[id]??D(0);}
   get nukeStrength(){return this.state.auNbStrength;}
  get effectiveLevel(){return id=>D(this.level(id)).floor().clamp(0,this.maxLevel(id)).mul(this.nukeStrength);}
- effect(id,level=this.level(id)){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return D(1);const l=D(level).floor().clamp(0,this.maxLevel(id)).mul(this.nukeStrength),boost=this.bonus('atom');if(id==='au1')return D(1).add(finitePower(u.effectBase,l.div(u.effectDivisor)).sub(1).mul(boost));if(id==='au2')return l.div(u.effectDivisor).mul(boost).clamp(0,1);if(id==='au3'||id==='au4')return D(1).add(l.div(u.effectDivisor).mul(boost));if(id==='au5')return D(1).add(l);if(id==='au6')return l;return D(1);}
+ effect(id,level=this.level(id)){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return D(1);if(this.state.activeEC==='ec6')return id==='au2'?D(1):id==='au6'?D(0):D(1);const l=D(level).floor().clamp(0,this.maxLevel(id)).mul(this.nukeStrength),boost=this.bonus('atom');if(id==='au1')return D(1).add(finitePower(u.effectBase,l.div(u.effectDivisor)).sub(1).mul(boost));if(id==='au2')return l.div(u.effectDivisor).mul(boost).clamp(0,1);if(id==='au3'||id==='au4')return D(1).add(l.div(u.effectDivisor).mul(boost));if(id==='au5')return D(1).add(l);if(id==='au6')return l;return D(1);}
  cost(id){const u=ATOM_UPGRADES.find(u=>u.id===id),max=this.maxLevel(id);if(!u||this.level(id).gte(max))return null;const l=this.level(id);if(u.costStart)return D(u.costStart).mul(finitePower(10,D(u.costScale).mul(finitePower(l.div(max),u.costPower))));return u.costBase?D(u.costBase).mul(finitePower(10,D(u.costScale).mul(finitePower(l.div(max),ATOM_COST_CURVE_POWER)))):finitePower(10,D(u.costExponent).add(l.mul(u.costLinear)).add(l.pow(2).mul(u.costQuadratic)));}
  buy(id,now=Date.now()){const cost=this.cost(id);if(cost===null||this.count.lt(1))return false;this.tick(now);if(this.atom.amount.lt(cost))return false;settleEternityEffects(this.state,now);this.atom.amount=this.atom.amount.sub(cost);this.atom.levels[id]=this.level(id).add(1);delete this.state._treeSpeedCache;if(id==="au5"&&this.level(id).gte(40)&&!this.state.achievements.includes("au5-40"))new AchievementSystem(this.state).check();return true;}
  buyMax(id,now=Date.now()){const u=ATOM_UPGRADES.find(u=>u.id===id);if(!u)return 0;let bought=0;while(bought<this.maxLevel(id)&&this.buy(id,now))bought++;return bought;}
