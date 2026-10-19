@@ -274,10 +274,11 @@ const RESET_AUTOMATION = Object.freeze({
   ascension:{achievement:AUTO_ASCENSION_ACHIEVEMENT_ID,enabled:'autoAscensionEnabled',initial:'autoAscensionInitialAP',multiplier:'autoAscensionMultiplier',target:'currentAutoAscensionTarget',unit:'AP'}
 });
 const CONFIG = {
-    releaseVersion: "0.7.3",
+    releaseVersion: "0.7.4",
 
     patchNotesKey: "prestige-ascension-last-seen-version",
     patchNotes: [
+ "v0.7.4：セーブコードの読み込みと表示を修正。設定画面のコードを読み込むには最新版を再読み込みしてください。",
  "v0.7.3：PC6〜8、EC1/2/4/6/8の調整、Atom Upgrade 5・6を追加。",
  "v0.7.2：Nuke / Atom・AU1〜4を実装。Nukeは下位リセットなし。Atomはオフライン対応。EC6を有効化.",
  "v0.7.1：Eternity Challenge難易度1、アレフツリー1〜16、8色のジェム購入・装着・レベルアップを追加。Nuke／Contain／PC6〜8本体は仕様待ち。",
@@ -318,6 +319,12 @@ const CONFIG = {
 // Large game quantities stay Decimal; time, levels and reset counts remain Number.
 const D = value => value instanceof Decimal ? value : new Decimal(value);
 function escapeHTML(value){return String(value).replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));}
+const SAVE_CODE_PREFIX="BI-SAVE-1:";
+const SAVE_CODE_KEY="bounce-incremental-save-obfuscation-v1";
+function saveCodeChecksum(bytes){let hash=2166136261;for(const byte of bytes){hash^=byte;hash=Math.imul(hash,16777619);}return (hash>>>0).toString(16).padStart(8,"0");}
+function encodeSaveCode(save){const bytes=new TextEncoder().encode(JSON.stringify(save)),check=saveCodeChecksum(bytes);let seed=2166136261;for(const c of SAVE_CODE_KEY)seed=Math.imul(seed^c.charCodeAt(0),16777619);const encoded=new Uint8Array(bytes.length);for(let i=0;i<bytes.length;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;encoded[i]=bytes[i]^(seed&255);}let binary="";for(let i=0;i<encoded.length;i+=0x8000)binary+=String.fromCharCode(...encoded.subarray(i,i+0x8000));return SAVE_CODE_PREFIX+check+":"+btoa(binary);}
+function decodeSaveCode(value){const text=String(value||"").trim();if(!text.startsWith(SAVE_CODE_PREFIX))throw new Error("セーブコードの形式ではありません");const match=text.slice(SAVE_CODE_PREFIX.length).match(/^([0-9a-f]{8}):([A-Za-z0-9+/]+={0,2})$/i);if(!match)throw new Error("セーブコードが途中で欠けているか、形式が壊れています");let binary;try{binary=atob(match[2]);}catch{throw new Error("セーブコードを読み取れません");}const encoded=Uint8Array.from(binary,c=>c.charCodeAt(0));let seed=2166136261;for(const c of SAVE_CODE_KEY)seed=Math.imul(seed^c.charCodeAt(0),16777619);const bytes=new Uint8Array(encoded.length);for(let i=0;i<encoded.length;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;bytes[i]=encoded[i]^(seed&255);}if(saveCodeChecksum(bytes)!==match[1].toLowerCase())throw new Error("セーブコードの検査に失敗しました。コピー時に欠落・変更がないか確認してください");let parsed;try{parsed=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes));}catch{throw new Error("セーブコードの内容を復元できません");}return parsed;}
+function persistState(state){localStorage.setItem(CONFIG.saveKey,encodeSaveCode(state.serialize()));}
 function readDecimal(value, fallback=0) {
   try { const d=D(value ?? fallback); return Number.isFinite(d.m) && Number.isFinite(d.e) && d.e<9e15 && d.gte(0) ? d : D(fallback); }
   catch { return D(fallback); }
@@ -1266,7 +1273,7 @@ class BackgroundTickSystem {
 class UIController {
   constructor(state, upgrades, prestige, ascension, infinity, infinityTree, challenges, achievements) { this.state=state; this.upgrades=upgrades; this.prestige=prestige; this.ascension=ascension; this.infinity=infinity; this.infinityTree=infinityTree; this.challenges=challenges; this.achievements=achievements; this.lastGain=0; this.activePage=null; this.cache(); this.bindEvents(); this.renderUpgrades(); this.showPatchNotesIfNew(); }
   cache() { this.el = Object.fromEntries(["score-value","score-rate","ball-multiplier","prestige-multiplier","ascension-multiplier","speed-readout","score-gain","simulation-bounces","prestige-button","prestige-summary","ascension-button","ascension-summary","upgrade-list","news-text","game-view","page-view","page-title","page-content","close-page","achievement-popup","achievement-popup-title","offline-modal","offline-duration","offline-bounces","offline-score","close-offline-modal","patch-notes-modal","patch-notes-version","patch-notes-list","close-patch-notes"].map(id=>[id,document.getElementById(id)])); }
-  bindEvents() { this.el["page-content"].addEventListener("click",event=>{const button=event.target.closest("[data-punk-action]");if(!button||button.disabled)return;const action=button.dataset.punkAction;let result=false;if(action==="perform")result=punkSystem.perform();if(action==="start")result=punkSystem.start(button.dataset.pc);if(action==="exit")result=punkSystem.finish(false);if(action==="dilemma")result=punkSystem.dilemma();if(action==="upgrade")result=punkSystem.buyUpgrade(button.dataset.upgradeId);if(result){localStorage.setItem(CONFIG.saveKey,JSON.stringify(state.serialize()));this.openPage(this.activePage==="challenges"?"challenges":"infinity");this.render();}}); document.querySelectorAll(".tab-button").forEach(button => button.addEventListener("click",() => this.openPage(button.dataset.tab))); this.el["upgrade-list"].addEventListener("pointerdown",event => { const button=event.target.closest("button[data-upgrade],button[data-buy-count],button[data-buy-max]"); if (!button) return; const id=button.dataset.upgrade || button.dataset.buyCount || button.dataset.buyMax; event.preventDefault(); const count=button.dataset.buyMax ? this.upgrades.buyMax(id) : button.dataset.buyCount ? this.upgrades.buyAmount(id,Number(button.dataset.buyCountValue)) : Number(this.upgrades.buy(id)); if (!count) this.flash("スコアが不足しています"); this.upgradeAvailability = null; this.refreshUpgradeAvailability(); }); this.el["prestige-button"].addEventListener("click",()=> { if (this.prestige.perform()) { this.flash("PRESTIGE 完了 — 倍率が強化されました"); this.upgradeAvailability = null; this.refreshUpgradeAvailability(); }}); this.el["ascension-button"].addEventListener("click",()=> { if (this.ascension.perform()) { this.flash("ASCENSION 完了 — 永続ボーナスが強化されました"); this.upgradeAvailability = null; this.refreshUpgradeAvailability(); }}); this.el["close-page"].addEventListener("click",()=>this.closePage()); this.el["close-offline-modal"].addEventListener("click",()=>this.el["offline-modal"].hidden=true); this.el["close-patch-notes"].addEventListener("click",()=>this.closePatchNotes()); }
+  bindEvents() { this.el["page-content"].addEventListener("click",event=>{const button=event.target.closest("[data-punk-action]");if(!button||button.disabled)return;const action=button.dataset.punkAction;let result=false;if(action==="perform")result=punkSystem.perform();if(action==="start")result=punkSystem.start(button.dataset.pc);if(action==="exit")result=punkSystem.finish(false);if(action==="dilemma")result=punkSystem.dilemma();if(action==="upgrade")result=punkSystem.buyUpgrade(button.dataset.upgradeId);if(result){persistState(state);this.openPage(this.activePage==="challenges"?"challenges":"infinity");this.render();}}); document.querySelectorAll(".tab-button").forEach(button => button.addEventListener("click",() => this.openPage(button.dataset.tab))); this.el["upgrade-list"].addEventListener("pointerdown",event => { const button=event.target.closest("button[data-upgrade],button[data-buy-count],button[data-buy-max]"); if (!button) return; const id=button.dataset.upgrade || button.dataset.buyCount || button.dataset.buyMax; event.preventDefault(); const count=button.dataset.buyMax ? this.upgrades.buyMax(id) : button.dataset.buyCount ? this.upgrades.buyAmount(id,Number(button.dataset.buyCountValue)) : Number(this.upgrades.buy(id)); if (!count) this.flash("スコアが不足しています"); this.upgradeAvailability = null; this.refreshUpgradeAvailability(); }); this.el["prestige-button"].addEventListener("click",()=> { if (this.prestige.perform()) { this.flash("PRESTIGE 完了 — 倍率が強化されました"); this.upgradeAvailability = null; this.refreshUpgradeAvailability(); }}); this.el["ascension-button"].addEventListener("click",()=> { if (this.ascension.perform()) { this.flash("ASCENSION 完了 — 永続ボーナスが強化されました"); this.upgradeAvailability = null; this.refreshUpgradeAvailability(); }}); this.el["close-page"].addEventListener("click",()=>this.closePage()); this.el["close-offline-modal"].addEventListener("click",()=>this.el["offline-modal"].hidden=true); this.el["close-patch-notes"].addEventListener("click",()=>this.closePatchNotes()); }
   showPatchNotesIfNew() { if(localStorage.getItem(CONFIG.patchNotesKey)===CONFIG.releaseVersion){this.el["patch-notes-modal"].hidden=true;return;} this.el["patch-notes-version"].textContent=`Ver ${CONFIG.releaseVersion}`; this.el["patch-notes-list"].innerHTML=CONFIG.patchNotes.map(note=>`<li>${note}</li>`).join(""); this.el["patch-notes-modal"].hidden=false; }
   closePatchNotes() { localStorage.setItem(CONFIG.patchNotesKey,CONFIG.releaseVersion); this.el["patch-notes-modal"].hidden=true; }
   openPage(page) {
@@ -1280,7 +1287,7 @@ class UIController {
       stats:{ title:"統計", content:()=>`<h2>現在の進行状況</h2><dl class="stats-grid">${this.statsMarkup()}</dl><button id="reset-save" class="text-button">セーブデータをリセット</button>` },
       achievements:{ title:"実績", content:()=>this.achievementMarkup() },
       automation:{title:"自動化",content:()=>this.automationMarkup()},
-      settings:{ title:"設定", content:()=>`<h2>表示設定</h2><label class="toggle-row"><input id="trail-toggle" type="checkbox" ${this.state.showTrail ? "checked" : ""} /> ボールの軌跡を表示</label><p>自動購入は「自動化」タブで設定できます。</p><section class="automation-settings"><h2>セーブデータ</h2><p>下のテキストをコピーしてバックアップできます。別のセーブを読み込む場合は、ここに貼り付けて「セーブを読み込む」を押してください。</p><label for="save-data-text">セーブデータ（JSON）</label><textarea id="save-data-text" rows="8" spellcheck="false" autocomplete="off" style="display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:10px;background:var(--bg);color:var(--text);border:1px solid var(--line);font:12px monospace;resize:vertical">${escapeHTML(JSON.stringify(this.state.serialize()))}</textarea><button type="button" id="copy-save-data">セーブを書き出す（コピー）</button> <button type="button" id="import-save-data">セーブを読み込む</button><p id="save-data-message" role="status" aria-live="polite"></p></section><button id="reset-save" class="text-button">ローカルセーブをリセット</button>` },
+      settings:{ title:"設定", content:()=>`<h2>表示設定</h2><label class="toggle-row"><input id="trail-toggle" type="checkbox" ${this.state.showTrail ? "checked" : ""} /> ボールの軌跡を表示</label><p>自動購入は「自動化」タブで設定できます。</p><section class="automation-settings"><h2>セーブデータ</h2><p>書き出しコードをコピーしてバックアップできます。読み込む場合はコード全体を貼り付けてください。JSONを直接編集したセーブは読み込めません。</p><label for="save-data-text">セーブコード（難読化形式）</label><textarea id="save-data-text" rows="8" spellcheck="false" autocomplete="off" style="display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:10px;background:var(--bg);color:var(--text);border:1px solid var(--line);font:12px monospace;resize:vertical">${escapeHTML(encodeSaveCode(this.state.serialize()))}</textarea><button type="button" id="copy-save-data">セーブを書き出す（コピー）</button> <button type="button" id="import-save-data">セーブを読み込む</button><p id="save-data-message" role="status" aria-live="polite"></p></section><button id="reset-save" class="text-button">ローカルセーブをリセット</button>` },
       infinity:{ title:"Infinity", content:()=>this.infinityMarkup() },
       challenges:{ title:"チャレンジ", content:()=>this.challengeMarkup() },
       help:{ title:"ヘルプ", content:()=>this.helpMarkup() },
@@ -1302,36 +1309,36 @@ class UIController {
       const key=input.dataset.autoBuy;
       if(!["enabled","gain","speed","critical"].includes(key)) return;
       this.state.autoBuy[key]=input.checked;
-      localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));
+      persistState(this.state);
       this.openPage("automation");
     }));
     document.querySelectorAll("[data-automation-tab]").forEach(button=>button.addEventListener("click",()=>this.selectAutomationTab(button.dataset.automationTab)));
     if(page==="automation")this.selectAutomationTab(this.automationTab||"normal");
     this.bindResetAutomationForms();
     const form=document.getElementById('auto-infinity-form');
-    if(form)form.addEventListener('submit',event=>{event.preventDefault();if(!this.state.hasInfinityNode('9-1'))return;const value=document.getElementById('auto-infinity-target').value,enabled=document.getElementById('auto-infinity-enabled').checked,message=document.getElementById('auto-infinity-message');if(!automation.setInfinitySettings(enabled,value)){message.textContent='1以上の数値を入力してください（例：1000、1e20）。';return;}localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));message.textContent='設定を保存しました。';});
+    if(form)form.addEventListener('submit',event=>{event.preventDefault();if(!this.state.hasInfinityNode('9-1'))return;const value=document.getElementById('auto-infinity-target').value,enabled=document.getElementById('auto-infinity-enabled').checked,message=document.getElementById('auto-infinity-message');if(!automation.setInfinitySettings(enabled,value)){message.textContent='1以上の数値を入力してください（例：1000、1e20）。';return;}persistState(this.state);message.textContent='設定を保存しました。';});
     const ibCreate=document.getElementById("ib-create");
-    if(ibCreate)ibCreate.addEventListener("click",()=>{ if(infinityBallSystem.create()){localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));this.openPage("infinity");} });
-    document.querySelectorAll("[data-ib-buy]").forEach(button=>button.addEventListener("click",()=>{if(button.dataset.ibAmount==="max" ? infinityBallSystem.buyMax(button.dataset.ibBuy) : infinityBallSystem.buyAmount(button.dataset.ibBuy,Number(button.dataset.ibAmount || 1))){localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));infinityBallSystem.render(this);} }));
+    if(ibCreate)ibCreate.addEventListener("click",()=>{ if(infinityBallSystem.create()){persistState(this.state);this.openPage("infinity");} });
+    document.querySelectorAll("[data-ib-buy]").forEach(button=>button.addEventListener("click",()=>{if(button.dataset.ibAmount==="max" ? infinityBallSystem.buyMax(button.dataset.ibBuy) : infinityBallSystem.buyAmount(button.dataset.ibBuy,Number(button.dataset.ibAmount || 1))){persistState(this.state);infinityBallSystem.render(this);} }));
     const trail=document.getElementById("trail-toggle");
     if (trail) trail.addEventListener("change",event=>this.state.showTrail=event.target.checked);
     const saveText=document.getElementById("save-data-text"),saveMessage=document.getElementById("save-data-message");
     const exportSave=document.getElementById("copy-save-data");
-    if(exportSave)exportSave.addEventListener("click",async()=>{if(!saveText||!saveMessage)return;saveText.value=JSON.stringify(this.state.serialize());saveText.focus();saveText.select();try{await navigator.clipboard.writeText(saveText.value);saveMessage.textContent="セーブデータをクリップボードにコピーしました。";}catch{saveMessage.textContent="セーブデータを選択しました。コピーしてください。";}});
+    if(exportSave)exportSave.addEventListener("click",async()=>{if(!saveText||!saveMessage)return;saveText.value=encodeSaveCode(this.state.serialize());saveText.focus();saveText.select();try{await navigator.clipboard.writeText(saveText.value);saveMessage.textContent="セーブデータをクリップボードにコピーしました。";}catch{saveMessage.textContent="セーブデータを選択しました。コピーしてください。";}});
     const importSave=document.getElementById("import-save-data");
     if(importSave)importSave.addEventListener("click",()=>{
       if(!saveText||!saveMessage)return;
       const fail=message=>{saveMessage.textContent=message;saveMessage.style.color="var(--danger, #ff7777)";};
       const input=saveText.value.trim().replace(/^\x60\x60\x60(?:json)?\s*/i,"").replace(/\s*\x60\x60\x60$/,"");
-      if(!input){fail("無効なデータです：セーブデータが空です。");return;}
+      if(!input){fail("無効なデータです：セーブコードが空です。");return;}
       let parsed;
-      try{parsed=JSON.parse(input);}catch(error){fail("無効なデータです：JSONを解析できません（"+error.message+"）。セーブ全体を貼り付けてください。");return;}
-      if(typeof parsed==="string"){try{parsed=JSON.parse(parsed);}catch{fail("無効なデータです：JSONの中に有効なセーブデータがありません。");return;}}
-      if(!parsed||typeof parsed!=="object"||Array.isArray(parsed)){fail("無効なデータです：セーブはJSONオブジェクト形式である必要があります。");return;}
+      try{parsed=decodeSaveCode(input);}catch(error){fail("無効なデータです："+error.message+"。書き出したセーブコード全体を貼り付けてください。");return;}
+      
+      if(!parsed||typeof parsed!=="object"||Array.isArray(parsed)){fail("無効なデータです：セーブコードの内容が正しくありません。");return;}
       const saveKeys=["score","eternity","eternityCount","infinityPoints","prestigePoints","ascensionPoints","infinityNodes","achievements","upgradeLevels"];
       if(!saveKeys.some(key=>Object.prototype.hasOwnProperty.call(parsed,key))){fail("無効なデータです：Bounce Incrementalのセーブ形式ではありません（認識できる進行データがありません）。");return;}
       try{
-        const normalized=JSON.stringify(new GameState(parsed).serialize()),checked=JSON.parse(normalized);
+        const normalized=encodeSaveCode(new GameState(parsed).serialize()),checked=decodeSaveCode(normalized);
         if(!checked||typeof checked!=="object"||!Object.prototype.hasOwnProperty.call(checked,"score"))throw new Error("セーブ内容を復元できません");
         const previous=localStorage.getItem(CONFIG.saveKey);
         try{localStorage.setItem(CONFIG.saveKey,normalized);if(localStorage.getItem(CONFIG.saveKey)!==normalized)throw new Error("ブラウザーの保存領域へ書き込めませんでした");}
@@ -1353,7 +1360,7 @@ class UIController {
       if (this.challenges.exit()) {
         this.lastGain=D(0);
         this.state.lastTickAt=Date.now();
-        localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));
+        persistState(this.state);
         this.flash("チャレンジを退出しました。通常プレイに戻りました。");
         this.upgradeAvailability=null;
         this.render();
@@ -1417,11 +1424,11 @@ class UIController {
         const valid=automation.setResetSettings(kind,enabled.checked,document.getElementById('auto-'+kind+'-initial').value,document.getElementById('auto-'+kind+'-multiplier').value);
         enabled.checked=this.state[RESET_AUTOMATION[kind].enabled];
         message.textContent=valid?'設定を保存しました。現在Targetは初回設定時以外そのままです。':'初回Targetは0より大きく、倍率は1以上にしてください。無効な入力時は自動化を停止します。';
-        localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));this.refreshResetAutomation();
+        persistState(this.state);this.refreshResetAutomation();
       });
       document.getElementById('auto-'+kind+'-reset-target')?.addEventListener('click',()=>{
         if(!automation.resetTarget(kind))return;
-        localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));message.textContent='現在Targetを保存済みの初回Targetに戻しました。';this.refreshResetAutomation();
+        persistState(this.state);message.textContent='現在Targetを保存済みの初回Targetに戻しました。';this.refreshResetAutomation();
       });
     }
   }
@@ -1558,7 +1565,7 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
     return `<section class="eternity-view"><h2>Eternity</h2>${summary}<button data-eternity-perform ${sys.available?'':'disabled'}>ETERNITY — +${format(sys.pendingPoints)} EP</button><p>${sys.blockReason||"下位進行をリセットし、EPとΣを獲得します。"}${s.debugOverridesActive?" 実行時にDebug overrideを解除します。":""}</p><nav class="help-tabs">${tabs.map(([id,label])=>`<button data-eternity-tab="${id}" class="${tab===id?'is-active':''}">${label}</button>`).join('')}</nav>${content}</section>`;
   }
   bindEternityControls(){
-    const update=()=>{this.refreshEternityPage();this.upgradeAvailability=null;localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));};
+    const update=()=>{this.refreshEternityPage();this.upgradeAvailability=null;persistState(this.state);};
     document.querySelectorAll('[data-nuke-perform]').forEach(b=>b.addEventListener('click',()=>{if(this.state.nukeSystem.perform())update();}));
     document.querySelectorAll('[data-au-buy]').forEach(b=>b.addEventListener('click',()=>{if(this.state.nukeSystem.buy(b.dataset.auBuy))update();}));
     document.querySelectorAll('[data-au-max]').forEach(b=>b.addEventListener('click',()=>{if(this.state.nukeSystem.buyMax(b.dataset.auMax))update();}));
@@ -1572,8 +1579,8 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
     document.querySelectorAll('[data-ec-start]').forEach(b=>b.addEventListener('click',()=>{if(new EternityChallengeSystem(this.state).start(b.dataset.ecStart))resetView();}));
     document.querySelectorAll('[data-ec-exit]').forEach(b=>b.addEventListener('click',()=>{if(new EternityChallengeSystem(this.state).finish(false))resetView();}));
     document.querySelectorAll('[data-eternity-tab]').forEach(b=>b.addEventListener('click',()=>{this.eternityTab=b.dataset.eternityTab;this.openPage('eternity');if(this.eternityTab==='aleph'){const scroll=document.getElementById('aleph-scroll');if(scroll)scroll.scrollTop=Math.max(0,1060-scroll.clientHeight/2);}}));
-    document.querySelectorAll('[data-eternity-auto]').forEach(b=>b.addEventListener('change',()=>{const id=b.dataset.eternityAuto;if(!this.state.hasEternityMilestone(id==='sphere'?128:20))return;this.state.eternity.automation[id]=b.checked;localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));}));
-    document.querySelectorAll('[data-eternity-perform]').forEach(b=>b.addEventListener('click',()=>{if(!eternitySystem.available)return;debugOverrides.clearAll();if(eternitySystem.perform()){physics.simulatedDistance=D(0);infinityBallSystem.lastVisualAt=null;this.lastGain=D(0);this.openPage('eternity');this.render();localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));}}));
+    document.querySelectorAll('[data-eternity-auto]').forEach(b=>b.addEventListener('change',()=>{const id=b.dataset.eternityAuto;if(!this.state.hasEternityMilestone(id==='sphere'?128:20))return;this.state.eternity.automation[id]=b.checked;persistState(this.state);}));
+    document.querySelectorAll('[data-eternity-perform]').forEach(b=>b.addEventListener('click',()=>{if(!eternitySystem.available)return;debugOverrides.clearAll();if(eternitySystem.perform()){physics.simulatedDistance=D(0);infinityBallSystem.lastVisualAt=null;this.lastGain=D(0);this.openPage('eternity');this.render();persistState(this.state);}}));
   }
 
   statsMarkup() { const s=this.state; return [["Raw P.mult",formatMultiplier(s.rawPrestigeMultiplier)],["SC後 P.mult",formatMultiplier(s.softcappedPrestigeMultiplier)],["最終 P.mult",formatMultiplier(s.prestigeMultiplier)],["Raw A.mult",formatMultiplier(s.rawAscensionMultiplier)],["SC後 A.mult",formatMultiplier(s.ascensionMultiplier)],["Critical率",formatMultiplier(s.criticalChance.mul(100))+"%"],["Critical倍率",formatMultiplier(s.criticalMultiplier)],["Common Exponent",formatMultiplier(s.scoreExponent)],["総バウンド",format(s.bounceCount)],["Prestige Point",formatMultiplier(s.prestigePoints)],["Ascension Point",formatMultiplier(s.ascensionPoints)],["Ascension回数",format(s.ascensionCount)],["Raw Multiplier Gain",formatMultiplier(s.rawMultiplierGain)],["Final Multiplier Gain",formatMultiplier(s.finalMultiplierGain)],["合計倍率",formatMultiplier(s.totalMultiplier)],["実績",`${s.achievements.length} / ${this.achievements.definitions.length}`],["プレイ時間",formatDuration(s.playTime)],["実効速度",formatMultiplier(s.effectiveSpeed)]].map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join(""); }
@@ -1643,7 +1650,7 @@ class DebugOverrides {
   list(){return Object.fromEntries([...this.values].map(([key,value])=>[key,value.toString()]));}
 }
 
-function loadState() { try { return new GameState(JSON.parse(localStorage.getItem(CONFIG.saveKey)) || {}); } catch { return new GameState(); } }
+function loadState() { try { const stored=localStorage.getItem(CONFIG.saveKey); if(!stored)return new GameState(); let saved; if(stored.startsWith(SAVE_CODE_PREFIX))saved=decodeSaveCode(stored);else{saved=JSON.parse(stored);if(!saved||typeof saved!=="object"||Array.isArray(saved))return new GameState();const migrated=new GameState(saved);persistState(migrated);return migrated;} return new GameState(saved); } catch(error) { console.error("セーブデータを読み込めませんでした",error); return new GameState(); } }
 
 const state=loadState(), achievements=new AchievementSystem(state), upgrades=new UpgradeSystem(state,achievements), prestige=new PrestigeSystem(state), ascension=new AscensionSystem(state), infinityTree=new InfinityTreeSystem(state), challenges=new InfinityChallengeSystem(state), infinity=new InfinitySystem(state,challenges), ui=new UIController(state,upgrades,prestige,ascension,infinity,infinityTree,challenges,achievements);
 const debugOverrides=new DebugOverrides(state);
@@ -1663,7 +1670,7 @@ document.addEventListener("keydown",event=>{ if (event.key==="Escape"&&!offlineM
 state.tickPassiveInfinity();
 setInterval(()=>{if(!document.hidden&&!ui.isResetting)eternitySystem.tickAutomation();},50);
 setInterval(()=>{if(!document.hidden && !ui.isResetting)automation.tick();},150);
-setInterval(()=>{state.nukeSystem.tick();new EternityChallengeSystem(state).checkCompletion();eternitySystem.tickPassive();punkSystem.tick();punkSystem.checkCompletion();state.tickPassiveInfinity(); new InfinityChallengeSystem(state).checkCompletion(); infinityBallSystem.tick(); infinityBallSystem.render(ui);  ui.render(); if (!ui.isResetting) localStorage.setItem(CONFIG.saveKey,JSON.stringify(state.serialize()));},150);
+setInterval(()=>{state.nukeSystem.tick();new EternityChallengeSystem(state).checkCompletion();eternitySystem.tickPassive();punkSystem.tick();punkSystem.checkCompletion();state.tickPassiveInfinity(); new InfinityChallengeSystem(state).checkCompletion(); infinityBallSystem.tick(); infinityBallSystem.render(ui);  ui.render(); if (!ui.isResetting) persistState(state);},150);
 document.addEventListener("visibilitychange",()=>{infinityBallSystem.setPageVisible(!document.hidden);infinityBallSystem.render(ui);});
 ui.render(); requestAnimationFrame(t=>physics.frame(t));
 // ================================
@@ -1691,7 +1698,7 @@ function updateEternityDebug(field,value,add=false){
     delete state._treeSpeedCache;delete state._speedPurchaseContext;
     punkSystem.refreshUnlocks();achievements.check();
     if(ui.activePage)ui.openPage(ui.activePage);
-    ui.render();localStorage.setItem(CONFIG.saveKey,JSON.stringify(state.serialize()));
+    ui.render();persistState(state);
     return D(target[field]);
 }
 window.gameDebug = {
@@ -1870,7 +1877,7 @@ window.gameDebug = {
     save() {
         localStorage.setItem(
             CONFIG.saveKey,
-            JSON.stringify(state.serialize())
+            encodeSaveCode(state.serialize())
         );
         return true;
     },
