@@ -1331,8 +1331,10 @@ class UIController {
         const previous=localStorage.getItem(CONFIG.saveKey);
         try{localStorage.setItem(CONFIG.saveKey,normalized);if(localStorage.getItem(CONFIG.saveKey)!==normalized)throw new Error("ブラウザーの保存領域へ書き込めませんでした");}
         catch(error){if(previous===null)localStorage.removeItem(CONFIG.saveKey);else localStorage.setItem(CONFIG.saveKey,previous);throw error;}
-        saveMessage.style.color="";saveMessage.textContent="セーブデータを読み込みました。ゲームを再読み込みします。";
-        setTimeout(()=>location.reload(),250);
+        // Stop the periodic autosave so it cannot overwrite the imported data with the old in-memory state.
+        this.isResetting=true;
+        saveMessage.style.color="";saveMessage.textContent="セーブデータを保存しました。読み込みを反映しています。";
+        location.reload();
       }catch(error){fail("セーブを読み込めませんでした："+(error.message||"データを復元できません")+"。現在のセーブは維持しています。");}
     });
     const reset=document.getElementById("reset-save");
