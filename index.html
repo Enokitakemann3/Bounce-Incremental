@@ -1314,7 +1314,27 @@ class UIController {
     const exportSave=document.getElementById("copy-save-data");
     if(exportSave)exportSave.addEventListener("click",async()=>{if(!saveText||!saveMessage)return;saveText.value=JSON.stringify(this.state.serialize());saveText.focus();saveText.select();try{await navigator.clipboard.writeText(saveText.value);saveMessage.textContent="セーブデータをクリップボードにコピーしました。";}catch{saveMessage.textContent="セーブデータを選択しました。コピーしてください。";}});
     const importSave=document.getElementById("import-save-data");
-    if(importSave)importSave.addEventListener("click",()=>{if(!saveText||!saveMessage)return;try{const parsed=JSON.parse(saveText.value);if(!parsed||typeof parsed!=="object"||Array.isArray(parsed)||!(["score","eternity","infinityPoints","prestigePoints"].some(key=>Object.prototype.hasOwnProperty.call(parsed,key))))throw new Error("invalid save");const normalized=new GameState(parsed).serialize();localStorage.setItem(CONFIG.saveKey,JSON.stringify(normalized));saveMessage.textContent="セーブデータを読み込みました。ゲームを再読み込みします。";setTimeout(()=>location.reload(),250);}catch{saveMessage.textContent="セーブデータを読み込めませんでした。JSON形式とセーブ内容を確認してください。";}});
+    if(importSave)importSave.addEventListener("click",()=>{
+      if(!saveText||!saveMessage)return;
+      const fail=message=>{saveMessage.textContent=message;saveMessage.style.color="var(--danger, #ff7777)";};
+      const input=saveText.value.trim().replace(/^\x60\x60\x60(?:json)?\s*/i,"").replace(/\s*\x60\x60\x60$/,"");
+      if(!input){fail("無効なデータです：セーブデータが空です。");return;}
+      let parsed;
+      try{parsed=JSON.parse(input);}catch(error){fail("無効なデータです：JSONを解析できません（"+error.message+"）。セーブ全体を貼り付けてください。");return;}
+      if(typeof parsed==="string"){try{parsed=JSON.parse(parsed);}catch{fail("無効なデータです：JSONの中に有効なセーブデータがありません。");return;}}
+      if(!parsed||typeof parsed!=="object"||Array.isArray(parsed)){fail("無効なデータです：セーブはJSONオブジェクト形式である必要があります。");return;}
+      const saveKeys=["score","eternity","eternityCount","infinityPoints","prestigePoints","ascensionPoints","infinityNodes","achievements","upgradeLevels"];
+      if(!saveKeys.some(key=>Object.prototype.hasOwnProperty.call(parsed,key))){fail("無効なデータです：Bounce Incrementalのセーブ形式ではありません（認識できる進行データがありません）。");return;}
+      try{
+        const normalized=JSON.stringify(new GameState(parsed).serialize()),checked=JSON.parse(normalized);
+        if(!checked||typeof checked!=="object"||!Object.prototype.hasOwnProperty.call(checked,"score"))throw new Error("セーブ内容を復元できません");
+        const previous=localStorage.getItem(CONFIG.saveKey);
+        try{localStorage.setItem(CONFIG.saveKey,normalized);if(localStorage.getItem(CONFIG.saveKey)!==normalized)throw new Error("ブラウザーの保存領域へ書き込めませんでした");}
+        catch(error){if(previous===null)localStorage.removeItem(CONFIG.saveKey);else localStorage.setItem(CONFIG.saveKey,previous);throw error;}
+        saveMessage.style.color="";saveMessage.textContent="セーブデータを読み込みました。ゲームを再読み込みします。";
+        setTimeout(()=>location.reload(),250);
+      }catch(error){fail("セーブを読み込めませんでした："+(error.message||"データを復元できません")+"。現在のセーブは維持しています。");}
+    });
     const reset=document.getElementById("reset-save");
     if (reset) reset.addEventListener("click",()=>{ if(confirm("セーブデータをリセットしますか？")) this.resetSave(); });
     document.querySelectorAll("[data-achievement-tab]").forEach(button=>button.addEventListener("click",()=>{this.achievementTab=button.dataset.achievementTab;this.openPage("achievements");}));
