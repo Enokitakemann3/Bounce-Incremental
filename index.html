@@ -314,6 +314,7 @@ const CONFIG = {
 
 // Large game quantities stay Decimal; time, levels and reset counts remain Number.
 const D = value => value instanceof Decimal ? value : new Decimal(value);
+function escapeHTML(value){return String(value).replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char]));}
 function readDecimal(value, fallback=0) {
   try { const d=D(value ?? fallback); return Number.isFinite(d.m) && Number.isFinite(d.e) && d.e<9e15 && d.gte(0) ? d : D(fallback); }
   catch { return D(fallback); }
@@ -1274,7 +1275,7 @@ class UIController {
       stats:{ title:"統計", content:()=>`<h2>現在の進行状況</h2><dl class="stats-grid">${this.statsMarkup()}</dl><button id="reset-save" class="text-button">セーブデータをリセット</button>` },
       achievements:{ title:"実績", content:()=>this.achievementMarkup() },
       automation:{title:"自動化",content:()=>this.automationMarkup()},
-      settings:{ title:"設定", content:()=>`<h2>表示設定</h2><label class="toggle-row"><input id="trail-toggle" type="checkbox" ${this.state.showTrail ? "checked" : ""} /> ボールの軌跡を表示</label><p>自動購入は「自動化」タブで設定できます。</p><button id="reset-save" class="text-button">ローカルセーブをリセット</button>` },
+      settings:{ title:"設定", content:()=>`<h2>表示設定</h2><label class="toggle-row"><input id="trail-toggle" type="checkbox" ${this.state.showTrail ? "checked" : ""} /> ボールの軌跡を表示</label><p>自動購入は「自動化」タブで設定できます。</p><section class="automation-settings"><h2>セーブデータ</h2><p>下のテキストをコピーしてバックアップできます。別のセーブを読み込む場合は、ここに貼り付けて「セーブを読み込む」を押してください。</p><label for="save-data-text">セーブデータ（JSON）</label><textarea id="save-data-text" rows="8" spellcheck="false" autocomplete="off" style="display:block;width:100%;box-sizing:border-box;margin:8px 0;padding:10px;background:var(--bg);color:var(--text);border:1px solid var(--line);font:12px monospace;resize:vertical">${escapeHTML(JSON.stringify(this.state.serialize()))}</textarea><button type="button" id="copy-save-data">セーブを書き出す（コピー）</button> <button type="button" id="import-save-data">セーブを読み込む</button><p id="save-data-message" role="status" aria-live="polite"></p></section><button id="reset-save" class="text-button">ローカルセーブをリセット</button>` },
       infinity:{ title:"Infinity", content:()=>this.infinityMarkup() },
       challenges:{ title:"チャレンジ", content:()=>this.challengeMarkup() },
       help:{ title:"ヘルプ", content:()=>this.helpMarkup() },
@@ -1309,6 +1310,11 @@ class UIController {
     document.querySelectorAll("[data-ib-buy]").forEach(button=>button.addEventListener("click",()=>{if(button.dataset.ibAmount==="max" ? infinityBallSystem.buyMax(button.dataset.ibBuy) : infinityBallSystem.buyAmount(button.dataset.ibBuy,Number(button.dataset.ibAmount || 1))){localStorage.setItem(CONFIG.saveKey,JSON.stringify(this.state.serialize()));infinityBallSystem.render(this);} }));
     const trail=document.getElementById("trail-toggle");
     if (trail) trail.addEventListener("change",event=>this.state.showTrail=event.target.checked);
+    const saveText=document.getElementById("save-data-text"),saveMessage=document.getElementById("save-data-message");
+    const exportSave=document.getElementById("copy-save-data");
+    if(exportSave)exportSave.addEventListener("click",async()=>{if(!saveText||!saveMessage)return;saveText.value=JSON.stringify(this.state.serialize());saveText.focus();saveText.select();try{await navigator.clipboard.writeText(saveText.value);saveMessage.textContent="セーブデータをクリップボードにコピーしました。";}catch{saveMessage.textContent="セーブデータを選択しました。コピーしてください。";}});
+    const importSave=document.getElementById("import-save-data");
+    if(importSave)importSave.addEventListener("click",()=>{if(!saveText||!saveMessage)return;try{const parsed=JSON.parse(saveText.value);if(!parsed||typeof parsed!=="object"||Array.isArray(parsed)||!(["score","eternity","infinityPoints","prestigePoints"].some(key=>Object.prototype.hasOwnProperty.call(parsed,key))))throw new Error("invalid save");const normalized=new GameState(parsed).serialize();localStorage.setItem(CONFIG.saveKey,JSON.stringify(normalized));saveMessage.textContent="セーブデータを読み込みました。ゲームを再読み込みします。";setTimeout(()=>location.reload(),250);}catch{saveMessage.textContent="セーブデータを読み込めませんでした。JSON形式とセーブ内容を確認してください。";}});
     const reset=document.getElementById("reset-save");
     if (reset) reset.addEventListener("click",()=>{ if(confirm("セーブデータをリセットしますか？")) this.resetSave(); });
     document.querySelectorAll("[data-achievement-tab]").forEach(button=>button.addEventListener("click",()=>{this.achievementTab=button.dataset.achievementTab;this.openPage("achievements");}));
