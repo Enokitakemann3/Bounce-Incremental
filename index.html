@@ -555,7 +555,7 @@ const ALEPH_NODES=[
 ALEPH_NODES.push(...[[17,[1],0,-1],[18,[17],-1,-2],[19,[17],1,-2],[20,[18],-2,-3],[21,[19],2,-3]].map(([id,requires,x,row])=>({id,requires,x,row,placeholder:true})));
 const GEM_DEFINITIONS=[
  ['red','赤','#ee6972','速度・倍率獲得量 ×800、以後×3/Lv','共通指数 ×1.10/Lv'],
- ['blue','青','#70afff','EP・ΣボーナスSC開始 +10%、以後+10ポイント/Lv','Σ獲得量 +10%/Lv'],
+ ['blue','青','#70afff','EP獲得量 ×2^Lv、ΣボーナスSC開始 +10%、以後+10ポイント/Lv','Σ獲得量 +10%/Lv'],
  ['yellow','黄','#f4d666','EP獲得量 ×6、以後+2/Lv','EP獲得量 ^1（Lv8以降、+0.05/Lv）'],
  ['purple','紫','#bd91f7','数値を持つChallenge報酬 +5%、以後+5ポイント/Lv','EP基礎式に +2/Lv'],
  ['orange','橙','#ffa469','数値を持つアレフ効果 +5%、以後+2ポイント/Lv','マイルストーン数値効果 +3%/Lv'],
@@ -585,6 +585,7 @@ class GemSystem{
  // Bonuses are measured above neutral (1), never divide neutral multipliers by five.
  normal(id,base,step){const lv=this.level(id);if(!lv)return D(0);let value=D(base).add(D(step).mul(lv-1)).mul(this.globalPower);if(id!=='black')value=value.mul(D(1).add(this.normal('black','.05','.02')));return value;}
  get redSpeedMultiplier(){const lv=this.level('red');if(!lv)return D(1);return D(800).mul(finitePower(3,lv-1)).mul(this.globalPower).mul(D(1).add(this.normal('black','.05','.02')));}
+ get blueEPMultiplier(){return finitePower(2,this.level('blue'));}
  get yellowEPMultiplier(){return D(1).add(this.normal('yellow',5,2));}
  get yellowEPExponent(){const extra=Math.max(0,this.level('yellow')-7);return D(1).add(D(extra).mul('.05').mul(this.globalPower).mul(D(1).add(this.normal('black','.05','.02'))));}
  get infinityBallSpeedExponent(){return this.normal('white','.1','.1').add(this.high('white').mul('.5'));}
@@ -742,7 +743,7 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   get alephIPMultiplier(){if(!this.hasAleph(4))return D(1);const x=this.eternity.points.div(2).max(1),raw=D(x.log(5));return this.alephMultiplier((raw.gt(100)?D(x.log(12)):raw).max(1));}
   get eternityCountGain(){let gain=this.hasAleph(5)?this.alephMultiplier(D(2).mul(this.hasEC('ec7')?this.challengeMultiplier(2):1)):D(1);return gain.mul(D(1).add(this.gems.high('blue').mul('.1')));}
   get eternityMilestoneEPMultiplier(){return [12,20,27].reduce((gain,count)=>this.hasEternityMilestone(count)?gain.mul(this.milestoneMultiplier(2)):gain,D(1));}
-  get epMultiplier(){return this.eternityMilestoneEPMultiplier.mul(this.hasAleph(9)?this.alephMultiplier(1000):1).mul(this.hasAleph(14)?this.alephMultiplier(100):1).mul(D(1).add(this.gems.normal('blue','.10','.10'))).mul(this.nukeSystem.effect('au5')).mul(this.nukeSystem.epCountMultiplier).mul(this.nukeSystem.epMilestoneMultiplier).mul(this.containSystem.epMultiplier);}
+  get epMultiplier(){return this.eternityMilestoneEPMultiplier.mul(this.hasAleph(9)?this.alephMultiplier(1000):1).mul(this.hasAleph(14)?this.alephMultiplier(100):1).mul(this.gems.blueEPMultiplier).mul(this.nukeSystem.effect('au5')).mul(this.nukeSystem.epCountMultiplier).mul(this.nukeSystem.epMilestoneMultiplier).mul(this.containSystem.epMultiplier);}
   get atomGainMultiplier(){const raw=this.eternityCount.max(1),a=D(raw.log10());const tree=this.hasAleph(11)?this.alephMultiplier((a.gt(10)?D(raw.log(15)):a).max(1)):D(1);return tree.mul(this.gems.greenAtomMultiplier).mul(this.ecClearCount>=20?this.milestoneMultiplier(10000):1).mul(this.hasPC('pc8')?1.1:1);}
   get atomTickPower(){return D(NUKE_CONFIG.atomTickPower).add(this.hasAleph(12)?this.alephAddition('.01'):0);}
   get atomTickSpeedMultiplier(){return D(1);}
@@ -1566,7 +1567,7 @@ return `<section class="punk-section"><h2>Punk Challenge</h2><p>${p.currentPC?PU
     const stat=(label,value)=>`<div><dt>${label}</dt><dd>${value}</dd></div>`;
     const effects={
       red:[['速度・倍率獲得量',g.redSpeedMultiplier],['共通指数',g.redExponentMultiplier]],
-      blue:[['EP / ΣボーナスSC開始',D(1).add(g.normal('blue','.10','.10'))],['Σ獲得量',D(1).add(g.high('blue').mul('.1'))]],
+      blue:[['EP獲得量',g.blueEPMultiplier],['ΣボーナスSC開始',D(1).add(g.normal('blue','.10','.10'))],['Σ獲得量',D(1).add(g.high('blue').mul('.1'))]],
       yellow:[['EP獲得量',g.yellowEPMultiplier],['EP獲得指数',g.yellowEPExponent]],
       purple:[['数値Challenge報酬',s.challengePower]],orange:[['アレフ効果量',D(1).add(g.normal('orange','.05','.02'))],['マイルストーン効果量',s.milestonePower]],
       green:[['Nuke効果量',D(1).add(g.normal('green','.1','.03'))],['Atom',g.greenAtomMultiplier]],
