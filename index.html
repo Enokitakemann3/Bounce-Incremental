@@ -529,8 +529,8 @@ const ETERNITY_CHALLENGES=[
  {id:'ec5',name:'輝きを失った',goal:'1e3500',restriction:'ジェムの効果量 ÷5',reward:'ジェム購入ごとの価格上昇倍率 ÷2'},
  {id:'ec6',name:'撃墜された',goal:'1e35000',restriction:'Nukeボーナス・Atom Upgrade効果無効／Nuke実行不可',reward:'無料Nuke回数 +1',pending:null},
  {id:'ec7',name:'木は枯れ果てた',goal:'1e10000',restriction:'アレフツリー効果無効（購入状態は保持）',reward:'アレフ5の効果 ×2'},
- {id:'ec8',name:'根底から崩れる',goal:'1e3000',restriction:'共通指数 ×0.4',reward:'共通指数 ×1.1'},
- {id:'ec9',name:'2大巨頭',goal:'1e15000',restriction:'共通指数 ÷2・速度／倍率獲得量の購入上限Lv6000',reward:'通常強化は必要Scoreを満たす場合のみ購入可能（Score消費なし）、Lv8000の追加コストSC撤廃'},
+ {id:'ec8',name:'根底から崩れる',goal:'1e45000',restriction:'共通指数 ×0.4',reward:'共通指数 ×1.1'},
+ {id:'ec9',name:'2大巨頭',goal:'1e45000',restriction:'共通指数 ÷2・速度／倍率獲得量の購入上限Lv6000',reward:'通常強化は必要Scoreを満たす場合のみ購入可能（Score消費なし）、Lv8000の追加コストSC撤廃'},
  {id:'ec10',name:'封印、封印、封印',goal:'1e308',restriction:'3倍のContain',reward:'CP獲得量 ×10',pending:'Contain本体の仕様待ち'}
 ];
 const ALEPH_NODES=[
@@ -542,7 +542,7 @@ const ALEPH_NODES=[
  [6,'宝石の実','300',[4],0,3,'ジェムを解放'],
  [7,'試練の記憶','1500',[4],2,3,'EternityでPunk Challengeクリアを保持'],
  [8,'新たな試練','3000',[7],2,4,'PC6〜8を解放'],
- [9,'永遠の養分','6.66e6',[5],-2,4,'EP獲得量 ×2'],
+ [9,'永遠の養分','6.66e6',[5],-2,4,'EP獲得量 ×1,000'],
  [10,'輝く根','1e15',[6,8,9],0,5,'Nuke報酬 ×1.5。黒ジェム取得時、価格を10000 EPへ一度戻す'],
  [11,'原子の枝','1e35',[10],-1,6,'Atom獲得量 ×log10(Σ)、倍率10超で底15'],
  [12,'刻む年輪','1e100',[10,11],1,6,'Atomティック指数 +0.01'],
@@ -742,7 +742,7 @@ this.passiveInfinityLastAt=typeof saved.passiveInfinityLastAt==="number"&&Number
   get alephIPMultiplier(){if(!this.hasAleph(4))return D(1);const x=this.eternity.points.div(2).max(1),raw=D(x.log(5));return this.alephMultiplier((raw.gt(100)?D(x.log(12)):raw).max(1));}
   get eternityCountGain(){let gain=this.hasAleph(5)?this.alephMultiplier(D(2).mul(this.hasEC('ec7')?this.challengeMultiplier(2):1)):D(1);return gain.mul(D(1).add(this.gems.high('blue').mul('.1')));}
   get eternityMilestoneEPMultiplier(){return [12,20,27].reduce((gain,count)=>this.hasEternityMilestone(count)?gain.mul(this.milestoneMultiplier(2)):gain,D(1));}
-  get epMultiplier(){return this.eternityMilestoneEPMultiplier.mul(this.hasAleph(9)?this.alephMultiplier(2):1).mul(this.hasAleph(14)?this.alephMultiplier(100):1).mul(D(1).add(this.gems.normal('blue','.10','.10'))).mul(this.nukeSystem.effect('au5')).mul(this.nukeSystem.epCountMultiplier).mul(this.nukeSystem.epMilestoneMultiplier).mul(this.containSystem.epMultiplier);}
+  get epMultiplier(){return this.eternityMilestoneEPMultiplier.mul(this.hasAleph(9)?this.alephMultiplier(1000):1).mul(this.hasAleph(14)?this.alephMultiplier(100):1).mul(D(1).add(this.gems.normal('blue','.10','.10'))).mul(this.nukeSystem.effect('au5')).mul(this.nukeSystem.epCountMultiplier).mul(this.nukeSystem.epMilestoneMultiplier).mul(this.containSystem.epMultiplier);}
   get atomGainMultiplier(){const raw=this.eternityCount.max(1),a=D(raw.log10());const tree=this.hasAleph(11)?this.alephMultiplier((a.gt(10)?D(raw.log(15)):a).max(1)):D(1);return tree.mul(this.gems.greenAtomMultiplier).mul(this.ecClearCount>=20?this.milestoneMultiplier(10000):1).mul(this.hasPC('pc8')?1.1:1);}
   get atomTickPower(){return D(NUKE_CONFIG.atomTickPower).add(this.hasAleph(12)?this.alephAddition('.01'):0);}
   get atomTickSpeedMultiplier(){return D(1);}
@@ -1040,7 +1040,7 @@ class UpgradeSystem {
     try { let purchases=0; while(purchases<amount && canContinue() && this.buy(id))purchases++;return purchases; }
     finally { if(id==="speed") { if(previous===undefined)delete this.state._speedPurchaseContext;else this.state._speedPurchaseContext=previous; } }
   }
-  buyMax(id, canContinue, limit=10000) { return this.buyAmount(id, Math.min(limit,10000), canContinue); }
+  buyMax(id, canContinue, limit=10000) { const cap=id==="speed"?5000:10000; return this.buyAmount(id, Math.min(limit,cap), canContinue); }
 }
 
 class PrestigeSystem {
@@ -1498,7 +1498,7 @@ class UIController {
   automationMarkup() {
     const unlocked=this.achievements.autoBuyUnlocked, prefs=this.state.autoBuy;
     const toggle=(key,label)=>`<label class="toggle-row"><input type="checkbox" data-auto-buy="${key}" ${prefs[key] ? "checked" : ""} ${!unlocked ? "disabled" : ""} /> ${label}</label>`;
-    return `<nav class="help-tabs" role="tablist" aria-label="自動化の種類"><button type="button" role="tab" id="auto-tab-normal" data-automation-tab="normal" aria-controls="auto-panel-normal">通常</button><button type="button" role="tab" id="auto-tab-infinity" data-automation-tab="infinity" aria-controls="auto-panel-infinity">Infinity</button></nav><div id="auto-panel-normal" role="tabpanel" aria-labelledby="auto-tab-normal" data-automation-content="normal"><section class="automation-settings"><h2>通常アップグレード自動購入</h2><p>${unlocked ? "解放済み：購入可能なアップグレードを継続して購入します。" : "実績#21「インフィニット！」取得で解放されます。"}</p>${toggle("enabled","通常アップグレード自動購入 ON / OFF")}${toggle("gain","倍率アップグレード自動購入")}${toggle("speed","スピードアップグレード自動購入")}${toggle("critical","Criticalアップグレード自動購入（解放後）")}<p class="muted">ONの間、150msごとにスピード → 倍率 → Criticalを1種類ずつMAX購入します。OFFの種類は購入せず次の順番へ進みます。通常は1回最大10000件ですが、処理が5msに達したら中断し、残りは次の周回で購入します。設定はリセット後も保持されます。</p></section>${this.resetAutomationMarkup("prestige")}${this.resetAutomationMarkup("ascension")}</div><div id="auto-panel-infinity" role="tabpanel" aria-labelledby="auto-tab-infinity" data-automation-content="infinity" hidden>${this.autoInfinityMarkup()}</div>`;
+    return `<nav class="help-tabs" role="tablist" aria-label="自動化の種類"><button type="button" role="tab" id="auto-tab-normal" data-automation-tab="normal" aria-controls="auto-panel-normal">通常</button><button type="button" role="tab" id="auto-tab-infinity" data-automation-tab="infinity" aria-controls="auto-panel-infinity">Infinity</button></nav><div id="auto-panel-normal" role="tabpanel" aria-labelledby="auto-tab-normal" data-automation-content="normal"><section class="automation-settings"><h2>通常アップグレード自動購入</h2><p>${unlocked ? "解放済み：購入可能なアップグレードを継続して購入します。" : "実績#21「インフィニット！」取得で解放されます。"}</p>${toggle("enabled","通常アップグレード自動購入 ON / OFF")}${toggle("gain","倍率アップグレード自動購入")}${toggle("speed","スピードアップグレード自動購入")}${toggle("critical","Criticalアップグレード自動購入（解放後）")}<p class="muted">ONの間、150msごとにスピード → 倍率 → Criticalを1種類ずつMAX購入します。OFFの種類は購入せず次の順番へ進みます。1回のMAX購入は速度5000件・その他10000件までです。自動購入は処理が5msに達したら中断し、残りは次の周回で購入します。設定はリセット後も保持されます。</p></section>${this.resetAutomationMarkup("prestige")}${this.resetAutomationMarkup("ascension")}</div><div id="auto-panel-infinity" role="tabpanel" aria-labelledby="auto-tab-infinity" data-automation-content="infinity" hidden>${this.autoInfinityMarkup()}</div>`;
   }
   autoInfinityMarkup(){const unlocked=this.state.hasInfinityNode('9-1'),p=this.state.autoInfinity;return `<section class="automation-settings"><h2>Infinity自動実行</h2><p>${unlocked?'獲得予定IPが目標以上になるとInfinityを実行します。':'IU9-1「無限が無限に！」の購入で解放されます。'}</p><form id="auto-infinity-form"><label class="toggle-row"><input id="auto-infinity-enabled" type="checkbox" ${p.enabled?'checked':''} ${unlocked?'':'disabled'}>Infinity自動実行 ON / OFF</label><label for="auto-infinity-target">1回のInfinityで獲得する目標IP</label><input id="auto-infinity-target" type="text" value="${p.targetIP.toString()}" autocomplete="off" spellcheck="false" ${unlocked?'':'disabled'}><p>目標以上で実行（最小1 IP）。例：1000、1e20。所持IPではなく獲得予定IPで判定します。</p><button type="submit" ${unlocked?'':'disabled'}>設定を保存</button><p id="auto-infinity-message" role="status"></p></form><p>現在の獲得予定：<strong id="auto-infinity-preview">${format(this.infinity.pendingPoints)} IP</strong></p></section>`;}
   comingSoonMarkup(name, description) { return `<section class="coming-soon-page"><span class="eyebrow">COMING SOON</span><h2>${name}</h2><p>${description}</p></section>`; }
